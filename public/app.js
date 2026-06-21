@@ -553,6 +553,9 @@ const searchAssistantMessage = document.querySelector('#searchAssistantMessage')
 const searchAssistantTalk = document.querySelector('#searchAssistantTalk');
 const searchVoiceToggle = document.querySelector('#searchVoiceToggle');
 let searchVoiceEnabled = localStorage.getItem(SEARCH_VOICE_KEY) === 'true';
+let currentSearchVoiceAudio = null;
+let currentSearchVoiceUrl = '';
+let searchVoiceRequestId = 0;
 
 if (searchAssistantMessage && searchAssistantTalk && searchVoiceToggle) {
   updateSearchVoiceButton();
@@ -580,11 +583,15 @@ function saySearchGreeting(message, forceVoice = false) {
   if (!searchAssistantMessage) return;
   searchAssistantMessage.textContent = message;
   if (searchVoiceEnabled || forceVoice) {
-    speakSearchWithVoicevox(message).catch(() => speakSearchWithBrowserVoice(message));
+    stopCurrentSearchVoice();
+    const requestId = ++searchVoiceRequestId;
+    speakSearchWithVoicevox(message, requestId).catch(() => {
+      if (requestId === searchVoiceRequestId) speakSearchWithBrowserVoice(message);
+    });
   }
 }
 
-async function speakSearchWithVoicevox(message) {
+async function speakSearchWithVoicevox(message, requestId) {
   if (!csrfToken) throw new Error('csrf token is not ready');
   const response = await fetch('/api/voicevox', {
     method: 'POST',
@@ -596,16 +603,37 @@ async function speakSearchWithVoicevox(message) {
   });
   if (!response.ok) throw new Error('VOICEVOX failed');
   const blob = await response.blob();
+  if (requestId !== searchVoiceRequestId) return;
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
-  audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-  audio.addEventListener('error', () => URL.revokeObjectURL(url), { once: true });
+  currentSearchVoiceAudio = audio;
+  currentSearchVoiceUrl = url;
+  const cleanup = () => {
+    if (currentSearchVoiceAudio === audio) currentSearchVoiceAudio = null;
+    if (currentSearchVoiceUrl === url) currentSearchVoiceUrl = '';
+    URL.revokeObjectURL(url);
+  };
+  audio.addEventListener('ended', cleanup, { once: true });
+  audio.addEventListener('error', cleanup, { once: true });
   await audio.play();
+}
+
+function stopCurrentSearchVoice() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (currentSearchVoiceAudio) {
+    currentSearchVoiceAudio.pause();
+    currentSearchVoiceAudio.currentTime = 0;
+    currentSearchVoiceAudio = null;
+  }
+  if (currentSearchVoiceUrl) {
+    URL.revokeObjectURL(currentSearchVoiceUrl);
+    currentSearchVoiceUrl = '';
+  }
 }
 
 function speakSearchWithBrowserVoice(message) {
   if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
+  stopCurrentSearchVoice();
   const utterance = new SpeechSynthesisUtterance(message);
   utterance.lang = 'ja-JP';
   utterance.rate = 1.02;

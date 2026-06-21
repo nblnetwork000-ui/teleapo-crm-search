@@ -47,6 +47,9 @@ let csrfToken = '';
 let leads = normalizeLeads(loadLeads());
 let selectedLeadId = leads[0]?.id || '';
 let voiceEnabled = localStorage.getItem(VOICE_KEY) === 'true';
+let currentVoiceAudio = null;
+let currentVoiceUrl = '';
+let voiceRequestId = 0;
 
 saveLeads();
 loadServerConfig();
@@ -586,11 +589,15 @@ function say(message, forceVoice = false) {
   setRemMood(message);
   assistantMessage.textContent = message;
   if (voiceEnabled || forceVoice) {
-    speakWithVoicevox(message).catch(() => speakWithBrowserVoice(message));
+    stopCurrentVoice();
+    const requestId = ++voiceRequestId;
+    speakWithVoicevox(message, requestId).catch(() => {
+      if (requestId === voiceRequestId) speakWithBrowserVoice(message);
+    });
   }
 }
 
-async function speakWithVoicevox(message) {
+async function speakWithVoicevox(message, requestId) {
   if (!csrfToken) throw new Error('csrf token is not ready');
   const response = await fetch('/api/voicevox', {
     method: 'POST',
@@ -602,16 +609,37 @@ async function speakWithVoicevox(message) {
   });
   if (!response.ok) throw new Error('VOICEVOX failed');
   const blob = await response.blob();
+  if (requestId !== voiceRequestId) return;
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
-  audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-  audio.addEventListener('error', () => URL.revokeObjectURL(url), { once: true });
+  currentVoiceAudio = audio;
+  currentVoiceUrl = url;
+  const cleanup = () => {
+    if (currentVoiceAudio === audio) currentVoiceAudio = null;
+    if (currentVoiceUrl === url) currentVoiceUrl = '';
+    URL.revokeObjectURL(url);
+  };
+  audio.addEventListener('ended', cleanup, { once: true });
+  audio.addEventListener('error', cleanup, { once: true });
   await audio.play();
+}
+
+function stopCurrentVoice() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (currentVoiceAudio) {
+    currentVoiceAudio.pause();
+    currentVoiceAudio.currentTime = 0;
+    currentVoiceAudio = null;
+  }
+  if (currentVoiceUrl) {
+    URL.revokeObjectURL(currentVoiceUrl);
+    currentVoiceUrl = '';
+  }
 }
 
 function speakWithBrowserVoice(message) {
   if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
+  stopCurrentVoice();
   const utterance = new SpeechSynthesisUtterance(message);
   utterance.lang = 'ja-JP';
   utterance.rate = 1.02;
