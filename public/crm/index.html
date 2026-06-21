@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>テレアポCRM</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" type="module"></script>
+  </head>
+  <body>
+    <main class="app crmShell">
+      <section class="sidePanel" aria-labelledby="pageTitle">
+        <div class="titleBlock">
+          <p class="eyebrow">Teleapo Command CRM</p>
+          <h1 id="pageTitle">テレアポCRM</h1>
+          <p id="recordCount">0件</p>
+        </div>
+
+        <section class="profileCard" aria-label="選択中の顧客">
+          <p class="eyebrow">Selected Customer</p>
+          <h2 id="selectedName">顧客を選択</h2>
+          <p id="selectedPhone">電話番号 -</p>
+          <p id="selectedAddress">住所 -</p>
+          <span id="selectedStatus" class="status status-new">未選択</span>
+        </section>
+
+        <form id="leadForm" class="form compactForm">
+          <input id="leadId" name="leadId" type="hidden" />
+          <label>
+            顧客名・会社名
+            <input name="name" type="text" maxlength="80" required />
+          </label>
+          <label>
+            電話番号
+            <input name="phone" type="tel" maxlength="30" />
+          </label>
+          <label>
+            住所
+            <input name="address" type="text" maxlength="140" />
+          </label>
+          <div class="buttonRow">
+            <button id="saveButton" type="submit">顧客情報を保存</button>
+            <button id="clearButton" class="secondary" type="button">新規入力</button>
+          </div>
+        </form>
+
+        <section class="themePanel" aria-label="表示設定">
+          <label>
+            テーマカラー
+            <input id="themeColor" type="color" value="#38bdf8" />
+          </label>
+          <div class="themeSwatches" aria-label="色候補">
+            <button type="button" data-color="#38bdf8" style="--swatch:#38bdf8"></button>
+            <button type="button" data-color="#a78bfa" style="--swatch:#a78bfa"></button>
+            <button type="button" data-color="#22c55e" style="--swatch:#22c55e"></button>
+            <button type="button" data-color="#f97316" style="--swatch:#f97316"></button>
+            <button type="button" data-color="#ef4444" style="--swatch:#ef4444"></button>
+          </div>
+          <button id="appearanceToggle" class="modeToggle" type="button" aria-pressed="false">ライトモード</button>
+        </section>
+      </section>
+
+      <section class="mainPanel" aria-labelledby="listTitle">
+        <div class="toolbar commandBar">
+          <div>
+            <h2 id="listTitle">顧客リスト</h2>
+            <p id="summary">未架電 0 / 見込み 0 / 再コール 0 / アポ 0 / 禁止 0</p>
+          </div>
+          <div class="toolbarActions">
+            <a class="iconButton navButton" href="../local-search.html">検索ページへ戻る</a>
+            <a class="iconButton navButton" href="/logout">ログアウト</a>
+            <input id="csvInput" type="file" accept=".csv,text/csv" hidden />
+            <button id="importButton" class="iconButton" type="button">CSV取込</button>
+            <button id="exportButton" class="iconButton" type="button">CSV出力</button>
+          </div>
+        </div>
+
+        <section class="callBoard" aria-labelledby="callBoardTitle">
+          <div class="callHeader">
+            <div>
+              <p class="eyebrow">Call Log</p>
+              <h2 id="callBoardTitle">架電メモ</h2>
+            </div>
+            <span id="callCount" class="callCount">0件</span>
+          </div>
+
+          <form id="callForm" class="callForm">
+            <div class="grid callGrid">
+              <label>
+                かけた担当者
+                <input name="person" type="text" maxlength="60" placeholder="例: 斉藤" />
+              </label>
+              <label>
+                かけた時間
+                <span class="timeInputRow">
+                  <input name="calledAt" type="datetime-local" />
+                  <button id="setCalledNowButton" class="timeNowButton" type="button">今</button>
+                </span>
+              </label>
+              <label>
+                結果
+                <select name="status">
+                  <option value="prospect">見込み</option>
+                  <option value="absent">留守</option>
+                  <option value="recall">再コール</option>
+                  <option value="appointment">アポ</option>
+                  <option value="banned">禁止</option>
+                  <option value="new">未架電</option>
+                </select>
+              </label>
+              <label>
+                次回連絡
+                <input name="nextCall" type="date" />
+              </label>
+            </div>
+            <label>
+              メモ
+              <textarea name="memo" maxlength="800" rows="4" placeholder="会話内容、温度感、次回話すことを残す"></textarea>
+            </label>
+            <button id="addNoteButton" type="submit">この顧客に記録を追加</button>
+          </form>
+
+          <div id="noteTimeline" class="noteTimeline" aria-live="polite"></div>
+        </section>
+
+        <div class="filters">
+          <input id="searchText" type="search" placeholder="顧客名・電話番号・住所・担当者・結果・メモで検索" maxlength="80" />
+          <select id="statusFilter">
+            <option value="all">すべて</option>
+            <option value="new">未架電</option>
+            <option value="prospect">見込み</option>
+            <option value="absent">留守</option>
+            <option value="recall">再コール</option>
+            <option value="appointment">アポ</option>
+            <option value="banned">禁止</option>
+          </select>
+        </div>
+
+        <div class="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>顧客名</th>
+                <th>電話番号</th>
+                <th>最新結果</th>
+                <th>最終架電</th>
+                <th>担当者</th>
+                <th>次回連絡</th>
+                <th>記録数</th>
+              </tr>
+            </thead>
+            <tbody id="leadRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <aside class="assistant" aria-live="polite">
+      <button id="assistantTalk" class="assistantAvatar" type="button" aria-label="レムに話してもらう"></button>
+      <div class="bubble remChatPanel">
+        <strong>レム</strong>
+        <p id="assistantMessage">顧客を選択すると、架電メモをどんどん蓄積できます。</p>
+        <div id="remChatLog" class="remChatLog" aria-live="polite"></div>
+        <form id="remChatForm" class="remChatForm">
+          <input id="remChatInput" name="message" type="text" maxlength="240" placeholder="レムに相談する" autocomplete="off" />
+          <button type="submit">送信</button>
+        </form>
+        <button id="voiceToggle" type="button">音声オン</button>
+      </div>
+    </aside>
+  </body>
+</html>

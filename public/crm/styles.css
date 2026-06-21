@@ -1,0 +1,423 @@
+:root {
+  color-scheme: dark;
+  --accent: #38bdf8;
+  --bg: #0a0f1c;
+  --panel: #101827;
+  --panel-2: #0f172a;
+  --line: #223047;
+  --text: #e5eefb;
+  --muted: #91a2bb;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: radial-gradient(circle at 16% 12%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 28%), #0a0f1c;
+  color: var(--text);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select, textarea { font: inherit; }
+
+.crmShell {
+  width: min(1480px, calc(100% - 32px));
+  margin: 24px auto;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 20px;
+}
+
+.sidePanel, .mainPanel, .profileCard, .callBoard, .themePanel {
+  background: linear-gradient(180deg, rgb(255 255 255 / 7%), rgb(255 255 255 / 3%));
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 26%);
+}
+
+.sidePanel { padding: 20px; align-self: start; display: grid; gap: 16px; }
+.mainPanel { overflow: hidden; }
+.titleBlock { margin-bottom: 2px; }
+.eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 11px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 28px; line-height: 1.12; }
+h2 { font-size: 20px; }
+#recordCount, #summary, #selectedPhone, #selectedAddress { color: var(--muted); font-size: 13px; }
+
+.profileCard { padding: 16px; display: grid; gap: 10px; }
+.profileCard h2 { font-size: 22px; line-height: 1.18; word-break: break-word; }
+.form, .callForm { display: grid; gap: 13px; }
+.compactForm { padding-top: 2px; }
+label { display: grid; gap: 7px; color: #cbd8ea; font-size: 12px; font-weight: 850; }
+input, select, textarea {
+  width: 100%; border: 1px solid #2a3952; border-radius: 7px; background: #0b1220; color: var(--text); padding: 10px 12px;
+}
+textarea { resize: vertical; }
+input:focus, select:focus, textarea:focus { outline: 3px solid color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.buttonRow { display: grid; grid-template-columns: 1fr 112px; gap: 10px; }
+button { border: 0; border-radius: 7px; background: var(--accent); color: #06101d; padding: 11px 14px; font-weight: 900; cursor: pointer; }
+button.secondary, .iconButton { background: #162238; color: #d8e6f7; border: 1px solid #2b3b55; }
+
+.themePanel { padding: 14px; display: grid; gap: 10px; }
+.themeSwatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.themeSwatches button { min-height: 30px; padding: 0; background: var(--swatch); border: 2px solid rgb(255 255 255 / 30%); }
+
+.toolbar { padding: 18px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.toolbarActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.navButton { display: inline-flex; align-items: center; justify-content: center; min-height: 38px; text-decoration: none; }
+.callBoard { margin: 16px 20px; padding: 16px; }
+.callHeader { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 14px; }
+.callCount { color: var(--accent); font-weight: 900; }
+.callGrid { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
+.timeInputRow { display: grid; grid-template-columns: 1fr 54px; gap: 8px; }
+.timeNowButton { padding: 10px 0; min-width: 0; }
+
+.noteTimeline { display: grid; gap: 10px; margin-top: 14px; max-height: 280px; overflow: auto; padding-right: 4px; }
+.noteCard { border: 1px solid #253653; background: #0b1220; border-radius: 8px; padding: 12px; display: grid; gap: 10px; }
+.noteMeta { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
+.noteCard p { color: #dce8f7; line-height: 1.55; white-space: pre-wrap; }
+.noteCard dl { margin: 0; display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+.noteCard div { display: flex; gap: 6px; }
+dt, dd { margin: 0; }
+.emptyState { color: var(--muted); border: 1px dashed #32435f; border-radius: 8px; padding: 14px; }
+
+.filters { padding: 0 20px 16px; display: grid; grid-template-columns: 1fr 180px; gap: 12px; }
+.tableWrap { overflow: auto; max-height: calc(100vh - 640px); min-height: 240px; border-top: 1px solid var(--line); }
+table { width: 100%; min-width: 920px; border-collapse: collapse; }
+th, td { padding: 12px 14px; border-bottom: 1px solid #1d2a40; text-align: left; vertical-align: top; font-size: 13px; }
+th { position: sticky; top: 0; z-index: 1; background: #111b2d; color: #9fb2cc; font-size: 11px; text-transform: uppercase; }
+tbody tr { cursor: pointer; }
+tbody tr:hover, tbody tr.is-selected { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+td small { display: block; color: var(--muted); margin-top: 4px; }
+.status { display: inline-flex; align-items: center; min-width: 72px; justify-content: center; border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 900; }
+.status-new { background: #263247; color: #cbd5e1; }
+.status-prospect, .status-called { background: #113829; color: #86efac; }
+.status-absent { background: #303747; color: #d5dce8; }
+.status-recall, .status-revisit { background: #3c2d12; color: #facc15; }
+.status-appointment { background: #12345f; color: #93c5fd; }
+.status-banned, .status-ng { background: #451a1a; color: #fca5a5; }
+
+.assistant { position: fixed; right: 18px; bottom: 18px; display: flex; align-items: end; gap: 10px; z-index: 5; }
+.assistantAvatar { width: 86px; height: 86px; border-radius: 50%; padding: 0; background-image: url('./rem-character.jpeg'); background-size: cover; background-position: center 38%; background-repeat: no-repeat; border: 3px solid #fff; box-shadow: 0 16px 34px rgb(0 0 0 / 34%); }
+.assistantAvatar .hair, .assistantAvatar .face, .assistantAvatar .dress { display: none; }
+.bubble { width: min(300px, calc(100vw - 126px)); background: #101827; border: 1px solid #2a3952; border-radius: 8px; padding: 12px 14px; box-shadow: 0 14px 34px rgb(0 0 0 / 26%); }
+.bubble strong { color: var(--accent); }
+.bubble p { margin-top: 5px; color: #dce8f7; font-size: 13px; line-height: 1.55; }
+#voiceToggle { width: auto; margin-top: 8px; padding: 6px 9px; background: #162238; color: #d8e6f7; border: 1px solid #2b3b55; font-size: 12px; }
+
+@media (max-width: 980px) {
+  .crmShell { grid-template-columns: 1fr; margin: 14px auto; }
+  .callGrid, .filters, .toolbar { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
+  .tableWrap { max-height: none; }
+  .assistant { left: 12px; right: 12px; }
+  .bubble { flex: 1; }
+}
+
+.remChatPanel {
+  width: min(360px, calc(100vw - 126px));
+}
+
+.remChatLog {
+  display: grid;
+  gap: 6px;
+  max-height: 150px;
+  overflow: auto;
+  margin-top: 10px;
+  padding-right: 4px;
+}
+
+.chatLine {
+  margin: 0;
+  padding: 8px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chatLine.is-user {
+  background: color-mix(in srgb, var(--accent) 20%, #0b1220);
+  color: #eef8ff;
+}
+
+.chatLine.is-rem {
+  background: #0b1220;
+  color: #dce8f7;
+  border: 1px solid #24334c;
+}
+
+.remChatForm {
+  display: grid;
+  grid-template-columns: 1fr 58px;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.remChatForm input {
+  padding: 8px 9px;
+  font-size: 13px;
+}
+
+.remChatForm button {
+  padding: 8px 0;
+  font-size: 12px;
+}
+
+.assistantAvatar {
+  background-image: var(--rem-image, url('./rem-character.jpeg'));
+  transition: transform 180ms ease, background-image 180ms ease;
+}
+
+.assistantAvatar:hover {
+  transform: translateY(-2px);
+}
+
+
+.profileCard #selectedName {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 160ms ease, text-shadow 160ms ease, transform 160ms ease;
+}
+
+.profileCard #selectedName::after {
+  content: "Google";
+  font-size: 11px;
+  line-height: 1;
+  color: #06111f;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 5px 8px;
+  opacity: 0.92;
+}
+
+.profileCard #selectedName:hover,
+.profileCard #selectedName:focus-visible {
+  color: var(--accent);
+  outline: none;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 38%, transparent);
+  transform: translateY(-1px);
+}
+
+
+.modeToggle {
+  width: 100%;
+  margin-top: 2px;
+  background: #162238;
+  color: #d8e6f7;
+  border: 1px solid #2b3b55;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f8fb;
+  --panel: #ffffff;
+  --panel-2: #eef4fb;
+  --line: #d6e0ec;
+  --text: #17202a;
+  --muted: #5d6b7a;
+  background: #f6f8fb;
+}
+
+:root[data-theme="light"] .sidePanel,
+:root[data-theme="light"] .mainPanel,
+:root[data-theme="light"] .profileCard,
+:root[data-theme="light"] .callBoard,
+:root[data-theme="light"] .themePanel,
+:root[data-theme="light"] .bubble {
+  background: #ffffff;
+  border-color: var(--line);
+  box-shadow: 0 24px 70px rgb(29 45 68 / 10%);
+}
+
+:root[data-theme="light"] label { color: #2d3a48; }
+:root[data-theme="light"] input,
+:root[data-theme="light"] select,
+:root[data-theme="light"] textarea {
+  background: #ffffff;
+  color: var(--text);
+  border-color: #b9c6d4;
+}
+
+:root[data-theme="light"] button.secondary,
+:root[data-theme="light"] .iconButton,
+:root[data-theme="light"] .modeToggle,
+:root[data-theme="light"] #voiceToggle {
+  background: #eef6ff;
+  color: #1769aa;
+  border-color: #c8def4;
+}
+
+:root[data-theme="light"] .noteCard,
+:root[data-theme="light"] .chatLine.is-rem {
+  background: #f8fbff;
+  border-color: #d6e0ec;
+}
+
+:root[data-theme="light"] .noteCard p,
+:root[data-theme="light"] .bubble p { color: #263443; }
+:root[data-theme="light"] th { background: #eef3f8; color: #334253; }
+:root[data-theme="light"] th,
+:root[data-theme="light"] td { border-bottom-color: #e7edf4; }
+:root[data-theme="light"] .emptyState { border-color: #cbd8e7; }
+
+
+.phoneLink {
+  color: var(--accent);
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.phoneLink:hover,
+.phoneLink:focus-visible {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .crmShell {
+    width: min(100% - 20px, 640px);
+    margin: 10px auto 112px;
+    gap: 12px;
+  }
+
+  .sidePanel,
+  .mainPanel,
+  .profileCard,
+  .callBoard,
+  .themePanel {
+    border-radius: 8px;
+  }
+
+  .sidePanel {
+    padding: 14px;
+    gap: 12px;
+  }
+
+  h1 {
+    font-size: 24px;
+  }
+
+  .profileCard h2 {
+    font-size: 20px;
+  }
+
+  .buttonRow,
+  .grid,
+  .callGrid,
+  .filters,
+  .timeInputRow {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar,
+  .callBoard {
+    margin: 0;
+  }
+
+  .toolbar {
+    padding: 14px;
+  }
+
+  .toolbarActions,
+  .buttonRow {
+    width: 100%;
+  }
+
+  .toolbarActions .iconButton,
+  .toolbarActions .navButton {
+    flex: 1 1 148px;
+  }
+
+  .callBoard {
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+    padding: 14px;
+  }
+
+  .noteTimeline {
+    max-height: none;
+  }
+
+  .filters {
+    padding: 0 14px 14px;
+  }
+
+  .tableWrap {
+    overflow: visible;
+    max-height: none;
+    min-height: 0;
+    padding: 10px;
+  }
+
+  table,
+  thead,
+  tbody,
+  tr,
+  th,
+  td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  tr {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    overflow: hidden;
+  }
+
+  td {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 10px;
+    border-bottom: 1px solid var(--line);
+    padding: 10px 12px;
+  }
+
+  td:last-child {
+    border-bottom: 0;
+  }
+
+  td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 900;
+  }
+
+  td small {
+    margin-top: 3px;
+  }
+
+  .assistant {
+    bottom: 10px;
+  }
+}
+
+
+:root[data-theme="light"] .chatLine.is-user {
+  background: color-mix(in srgb, var(--accent) 18%, #ffffff);
+  color: #102033;
+  border: 1px solid #c8def4;
+}
+
+:root[data-theme="light"] .chatLine.is-rem {
+  background: #ffffff;
+  color: #17202a;
+  border-color: #d6e0ec;
+}
+
+:root[data-theme="light"] .remChatForm input {
+  background: #ffffff;
+  color: #17202a;
+  border-color: #b9c6d4;
+}

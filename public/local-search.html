@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>店舗情報取得</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" type="module"></script>
+  </head>
+  <body>
+    <main class="app">
+      <section class="panel" aria-labelledby="pageTitle">
+        <div class="heading commandHeading">
+          <div>
+            <p class="eyebrow">Search Command</p>
+            <h1 id="pageTitle">店舗情報取得</h1>
+            <p id="sheetName">追記先: 読み込み中</p>
+          </div>
+          <button id="appearanceToggle" class="modeToggle" type="button" aria-pressed="false">ライト</button>
+        </div>
+
+        <div class="tabs" aria-label="検索種別">
+          <button class="tabButton is-active" type="button" data-mode="shops">店舗検索</button>
+          <button class="tabButton" type="button" data-mode="events">イベント検索</button>
+          <button class="tabButton" type="button" data-mode="jobs">求人掲載店舗</button>
+        </div>
+
+        <form id="shopForm" class="form searchForm" data-mode="shops">
+          <label>
+            業種
+            <select id="shopIndustry" name="industry">
+              <option value="custom">自由入力</option>
+              <option value="beautySalon">美容室</option>
+              <option value="barber">理容室</option>
+              <option value="eyelash">アイラッシュ</option>
+              <option value="nail">ネイルサロン</option>
+              <option value="esthetic">エステサロン</option>
+              <option value="relaxation">リラクゼーション</option>
+              <option value="seitai">整体</option>
+              <option value="seikotsu">整骨院</option>
+              <option value="acupuncture">鍼灸院</option>
+              <option value="clinic">クリニック</option>
+              <option value="dental">歯科医院</option>
+              <option value="dermatology">美容皮膚科</option>
+              <option value="personalGym">パーソナルジム</option>
+              <option value="pilates">ピラティス</option>
+              <option value="yoga">ヨガスタジオ</option>
+              <option value="dance">ダンススクール</option>
+              <option value="juku">学習塾</option>
+              <option value="english">英会話スクール</option>
+              <option value="programming">プログラミング教室</option>
+              <option value="restaurant">飲食店</option>
+              <option value="izakaya">居酒屋</option>
+              <option value="yakiniku">焼肉</option>
+              <option value="ramen">ラーメン</option>
+              <option value="cafe">カフェ</option>
+              <option value="bar">バー</option>
+              <option value="hotel">ホテル</option>
+              <option value="realEstate">不動産会社</option>
+              <option value="renovation">リフォーム</option>
+              <option value="carDealer">中古車販売</option>
+              <option value="carRepair">自動車整備</option>
+              <option value="petSalon">ペットサロン</option>
+              <option value="veterinary">動物病院</option>
+              <option value="cleaning">ハウスクリーニング</option>
+              <option value="funeral">葬儀社</option>
+              <option value="photoStudio">写真館</option>
+              <option value="wedding">結婚相談所</option>
+              <option value="nursery">保育園</option>
+              <option value="care">介護施設</option>
+              <option value="dayService">デイサービス</option>
+            </select>
+          </label>
+          <label>
+            キーワード
+            <input id="keyword" name="keyword" type="text" maxlength="80" placeholder="例: 居酒屋" value="居酒屋" required />
+          </label>
+          <div class="grid">
+            <label>
+              都道府県
+              <select id="shopPrefecture" name="prefecture"></select>
+            </label>
+            <label>
+              市区
+              <select id="shopCity" name="city"></select>
+            </label>
+          </div>
+          <label>
+            エリア
+            <input id="area" name="area" type="text" maxlength="80" placeholder="例: 新宿" value="新宿" required />
+          </label>
+          <div class="grid">
+            <label>
+              件数
+              <input id="results" name="results" type="number" min="1" max="100" value="20" required />
+            </label>
+            <label>
+              開始位置
+              <input id="start" name="start" type="number" min="1" max="3000" value="1" required />
+            </label>
+          </div>
+          <label>
+            並び順
+            <select id="sort" name="sort">
+              <option value="hybrid">総合</option>
+              <option value="rating">評価</option>
+              <option value="score">関連度</option>
+              <option value="review">口コミ数</option>
+              <option value="kana">名前順</option>
+              <option value="price">価格</option>
+              <option value="dist">距離</option>
+              <option value="geo">地図範囲</option>
+              <option value="match">キーワード一致</option>
+            </select>
+          </label>
+          <label class="check">
+            <input name="append" type="checkbox" checked />
+            Googleスプレッドシートに追記
+          </label>
+          <button id="submitButton" type="submit">検索して追記</button>
+        </form>
+
+        <form id="eventForm" class="form searchForm is-hidden" data-mode="events">
+          <label>
+            キーワード
+            <input id="eventKeyword" name="keyword" type="text" maxlength="80" placeholder="例: 交流会" value="交流会" required />
+          </label>
+          <label>
+            エリア
+            <input id="eventArea" name="area" type="text" maxlength="80" placeholder="例: 東京" />
+          </label>
+          <label>
+            検索元
+            <select id="eventSource" name="source">
+              <option value="all">全部</option>
+              <option value="kokuchpro">こくちーず</option>
+              <option value="connpass">connpass</option>
+              <option value="doorkeeper">Doorkeeper</option>
+            </select>
+          </label>
+          <div class="grid grid-three">
+            <label>
+              件数
+              <input id="eventResults" name="results" type="number" min="1" max="100" value="20" required />
+            </label>
+            <label>
+              開始位置
+              <input id="eventStart" name="start" type="number" min="1" max="1000" value="1" required />
+            </label>
+            <label class="check inline-check">
+              <input name="append" type="checkbox" checked />
+              追記
+            </label>
+          </div>
+          <label class="check">
+            <input name="futureOnly" type="checkbox" checked />
+            今日以降のイベントのみ
+          </label>
+          <button id="eventSubmitButton" type="submit">イベント検索して追記</button>
+        </form>
+
+        <form id="jobForm" class="form searchForm is-hidden" data-mode="jobs">
+          <label>
+            ターゲット種別
+            <select id="jobTarget" name="target">
+              <option value="custom">自由入力</option>
+              <option value="intangible">無形商材・法人営業</option>
+              <option value="saas">SaaS・ITサービス</option>
+              <option value="webMarketing">Web広告・マーケ支援</option>
+              <option value="recruiting">人材・採用支援</option>
+              <option value="consulting">コンサルティング</option>
+              <option value="insurance">保険・金融営業</option>
+              <option value="realEstate">不動産・投資営業</option>
+              <option value="beauty">美容室・美容サロン</option>
+              <option value="clinic">整体・整骨院</option>
+            </select>
+          </label>
+          <label>
+            キーワード
+            <input id="jobKeyword" name="keyword" type="text" maxlength="80" placeholder="例: 法人営業 無形商材" value="法人営業 無形商材" required />
+          </label>
+          <label>
+            エリア
+            <input id="jobArea" name="area" type="text" maxlength="80" placeholder="例: 東京都" value="東京都" required />
+          </label>
+          <label>
+            検索元
+            <select id="jobSource" name="source">
+              <option value="kyujinbox">求人ボックス</option>
+            </select>
+          </label>
+          <div class="grid grid-three">
+            <label>
+              件数
+              <input id="jobResults" name="results" type="number" min="1" max="100" value="20" required />
+            </label>
+            <label>
+              開始位置
+              <input id="jobStart" name="start" type="number" min="1" max="1000" value="1" required />
+            </label>
+            <label class="check inline-check">
+              <input name="append" type="checkbox" checked />
+              追記
+            </label>
+          </div>
+          <button id="jobSubmitButton" type="submit">求人掲載店舗を検索して追記</button>
+        </form>
+
+        <p id="status" class="status" role="status"></p>
+      </section>
+
+      <section class="results" aria-labelledby="resultsTitle">
+        <div class="toolbar">
+          <h2 id="resultsTitle">取得結果</h2>
+          <div class="toolbarActions">
+            <span id="summary"></span>
+            <button id="bulkCrmButton" class="crmLink crmAction" type="button" hidden>検索結果を全件CRM追加</button>
+            <a class="crmLink" href="./crm/index.html" target="_blank" rel="noopener">CRMを開く</a>
+            <a class="crmLink" href="/logout">ログアウト</a>
+          </div>
+        </div>
+        <div class="tableWrap">
+          <table>
+            <thead>
+              <tr id="shopHead">
+                <th>会社名</th>
+                <th>電話番号</th>
+                <th>住所</th>
+                <th>CRM</th>
+              </tr>
+              <tr id="eventHead" class="is-hidden">
+                <th>イベント名</th>
+                <th>開催開始</th>
+                <th>会場</th>
+                <th>住所</th>
+                <th>参加</th>
+              </tr>
+              <tr id="jobHead" class="is-hidden">
+                <th>店舗名・会社名</th>
+                <th>掲載企業</th>
+                <th>求人タイトル</th>
+                <th>勤務地</th>
+                <th>給与</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <aside class="assistant searchAssistant" aria-live="polite">
+      <button id="searchAssistantTalk" class="assistantAvatar" type="button" aria-label="レムに話してもらう"></button>
+      <div class="bubble">
+        <strong>レム</strong>
+        <p id="searchAssistantMessage">検索結果からCRMへ追加できます。今日も一緒に整えていきましょう。</p>
+        <button id="searchVoiceToggle" type="button">音声オン</button>
+      </div>
+    </aside>
+  </body>
+</html>
