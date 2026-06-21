@@ -147,6 +147,8 @@ for (const swatch of themeSwatches) {
 }
 
 
+prepareBrowserVoices();
+
 function openSelectedLeadGoogleSearch() {
   const lead = selectedLead();
   if (!lead || !lead.name) {
@@ -624,6 +626,28 @@ async function speakWithVoicevox(message, requestId) {
   await audio.play();
 }
 
+
+function getPreferredJapaneseVoice() {
+  if (!('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  const isJapanese = (voice) => /^ja[-_]/i.test(voice.lang || '') || /Japanese|日本語|Kyoko|Nanami|Haruka|Sayaka|Hina/i.test(voice.name || '');
+  const avoidMale = (voice) => !/Otoya|Ichiro|Keita|男性|male/i.test(voice.name || '');
+  const candidates = voices.filter((voice) => isJapanese(voice) && avoidMale(voice));
+  const preferredNames = ['Kyoko', 'Nanami', 'Haruka', 'Sayaka', 'Hina', 'Google 日本語', 'Japanese'];
+  for (const name of preferredNames) {
+    const found = candidates.find((voice) => (voice.name || '').includes(name));
+    if (found) return found;
+  }
+  return candidates[0] || voices.find(isJapanese) || null;
+}
+
+function prepareBrowserVoices() {
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.getVoices();
+  window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+}
+
 function stopCurrentVoice() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   if (currentVoiceAudio) {
@@ -642,8 +666,11 @@ function speakWithBrowserVoice(message) {
   stopCurrentVoice();
   const utterance = new SpeechSynthesisUtterance(message);
   utterance.lang = 'ja-JP';
-  utterance.rate = 1.02;
-  utterance.pitch = 1.18;
+  const preferredVoice = getPreferredJapaneseVoice();
+  if (preferredVoice) utterance.voice = preferredVoice;
+  utterance.rate = 0.94;
+  utterance.pitch = 1.42;
+  utterance.volume = 1;
   window.speechSynthesis.speak(utterance);
 }
 
