@@ -151,7 +151,8 @@ function textCell(value, label) {
 }
 
 function detailCell(item) {
-  const td = textCell('', '詳細');
+  const td = document.createElement('td');
+  td.dataset.label = '詳細';
   td.classList.add('detailCell');
   if (!item.url) {
     td.textContent = item.source || '-';

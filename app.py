@@ -845,7 +845,7 @@ def parse_external_datetimes(text):
             else:
                 year = today_local_date().year
                 month, day = groups
-            tail = (text or "")[match.end() : match.end() + 30]
+            tail = (text or "")[match.end() : match.end() + 200]
             time_match = re.search(r"(\d{1,2}):(?P<minute>\d{2})", tail)
             hour = int(time_match.group(1)) if time_match else 0
             minute = int(time_match.group("minute")) if time_match else 0
