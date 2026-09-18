@@ -14,12 +14,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, time as datetime_time
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC_DIR = ROOT / "public"
+JST = timezone(timedelta(hours=9))
 PHONEBOOK_CASSETTE_ID = "d8a23e9e64a4c817227ab09858bc1330"
 HEADERS = [
     "会社名",
@@ -829,7 +830,7 @@ def parse_external_datetimes(text):
             hour = int(time_match.group(1)) if time_match else 0
             minute = int(time_match.group("minute")) if time_match else 0
             try:
-                value = datetime(year, month, day, hour, minute, tzinfo=datetime.now().astimezone().tzinfo).isoformat()
+                value = datetime(year, month, day, hour, minute, tzinfo=JST).isoformat()
             except ValueError:
                 continue
             if value not in seen:
@@ -1064,7 +1065,7 @@ def scrape_connpass_search(keyword, start, results, future_only):
 
 
 def today_local_date():
-    return datetime.now().astimezone().date()
+    return datetime.now(JST).date()
 
 
 def is_event_today_or_later(started_at, today):
@@ -1072,9 +1073,8 @@ def is_event_today_or_later(started_at, today):
         value = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
     except ValueError:
         return False
-    local_timezone = datetime.now().astimezone().tzinfo
-    local_midnight = datetime.combine(today, datetime_time.min, local_timezone)
-    return value.astimezone(local_timezone) >= local_midnight
+    local_midnight = datetime.combine(today, datetime_time.min, JST)
+    return value.astimezone(JST) >= local_midnight
 
 
 def parse_connpass_search_html(text):
@@ -1252,14 +1252,13 @@ def parse_japanese_datetime(date_text, time_text):
         return ""
     hour = int(time_match.group(1)) if time_match else 0
     minute = int(time_match.group(2)) if time_match else 0
-    local_timezone = datetime.now().astimezone().tzinfo
     value = datetime(
         int(date_match.group(1)),
         int(date_match.group(2)),
         int(date_match.group(3)),
         hour,
         minute,
-        tzinfo=local_timezone,
+        tzinfo=JST,
     )
     return value.isoformat()
 
