@@ -201,6 +201,7 @@ def load_config():
         "SESSION_SECRET": os.environ.get("SESSION_SECRET") or secrets.token_hex(32),
         "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
         "OPENAI_MODEL": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+        "BRAVE_SEARCH_API_KEY": os.environ.get("BRAVE_SEARCH_API_KEY", ""),
         "VOICEVOX_URL": os.environ.get("VOICEVOX_URL", "http://127.0.0.1:50021"),
         "VOICEVOX_SPEAKER": int_env("VOICEVOX_SPEAKER", 24, 0, 999),
     }
@@ -251,7 +252,7 @@ def parse_search_input(data, max_results):
 
 def parse_event_search_input(data, max_results):
     source = data.get("source", "connpass")
-    if source not in {"connpass", "kokuchpro", "doorkeeper", "all"}:
+    if source not in {"connpass", "kokuchpro", "doorkeeper", "web", "all"}:
         raise InputError("検索元の指定が不正です。")
     return {
         "keyword": clean_text(data.get("keyword"), "キーワード"),
@@ -356,7 +357,7 @@ def search_yahoo_local(config, search):
     }
 
 
-def search_connpass_events(search):
+def search_connpass_events(search, brave_search_api_key=""):
     keyword = search["keyword"]
     if search["area"]:
         keyword = f"{keyword} {search['area']}"
@@ -367,6 +368,10 @@ def search_connpass_events(search):
         events = scrape_kokuchpro_search(search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"])
     elif search["source"] == "doorkeeper":
         events = scrape_doorkeeper_search(search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"])
+    elif search["source"] == "web":
+        if not brave_search_api_key:
+            raise InputError("Web検索APIが未設定です。管理者に設定を依頼してください。")
+        events = search_web_events(brave_search_api_key, search)
     else:
         source_searches = (
             ("connpass", lambda: scrape_connpass_search(keyword, search["start"], search["results"], search["futureOnly"])),
@@ -384,6 +389,8 @@ def search_connpass_events(search):
             ),
         )
         successful_sources = []
+        if brave_search_api_key:
+            source_searches += (("Web検索", lambda: search_web_events(brave_search_api_key, search)),)
         for source_name, source_search in source_searches:
             try:
                 successful_sources.append(source_search())
@@ -392,6 +399,7 @@ def search_connpass_events(search):
         if not successful_sources:
             raise RuntimeError("すべてのイベント検索元から取得できませんでした。しばらく待って再試行してください。")
         events = merge_event_sources(*successful_sources)[: search["results"]]
+    events = filter_events_by_area(events, search["area"])
     return {
         "total": len(events),
         "count": len(events),
@@ -407,6 +415,79 @@ def brief_external_error(error):
     if http_status:
         return f"HTTP {http_status.group(1)}"
     return message[:120] or "取得エラー"
+
+
+def filter_events_by_area(events, area):
+    tokens = [token for token in re.split(r"[\s,、]+", area or "") if token]
+    if not tokens:
+        return events
+
+    # 市区町村まで指定した場合は、掲載側が都道府県名を省略していても
+    # 最も細かい地域名が一致すれば候補として残す。
+    required_tokens = tokens[-1:] if len(tokens) > 1 else tokens
+
+    def token_matches(token, searchable):
+        candidates = {token}
+        shorter = re.sub(r"(?:都|道|府|県|市|区|町|村)$", "", token)
+        if shorter:
+            candidates.add(shorter)
+        return any(candidate.lower() in searchable for candidate in candidates)
+
+    filtered = []
+    for item in events:
+        if item.get("source") == "Web検索":
+            filtered.append(item)
+            continue
+        searchable = " ".join(
+            str(item.get(field) or "") for field in ("title", "place", "address", "owner")
+        ).lower()
+        if all(token_matches(token, searchable) for token in required_tokens):
+            filtered.append(item)
+    return filtered
+
+
+def search_web_events(api_key, search):
+    query_parts = [search["keyword"], search["area"], "イベント セミナー 交流会"]
+    query = " ".join(part for part in query_parts if part)
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "count": str(min(search["results"], 20)),
+            "offset": str(min(9, max(0, (search["start"] - 1) // 20))),
+            "country": "jp",
+            "search_lang": "jp",
+            "safesearch": "moderate",
+        }
+    )
+    data = request_json(
+        f"https://api.search.brave.com/res/v1/web/search?{params}",
+        headers={"X-Subscription-Token": api_key},
+    )
+    items = []
+    for result in (data.get("web") or {}).get("results") or []:
+        url = as_text(result.get("url"))
+        if not url:
+            continue
+        profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+        items.append(
+            {
+                "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "title": as_text(result.get("title")),
+                "startedAt": "",
+                "endedAt": "",
+                "place": as_text(profile.get("long_name") or urllib.parse.urlparse(url).netloc),
+                "address": as_text(result.get("description")),
+                "url": url,
+                "limit": "",
+                "accepted": "",
+                "waiting": "",
+                "owner": "",
+                "hashTag": "",
+                "eventId": url,
+                "source": "Web検索",
+            }
+        )
+    return items
 
 
 def search_job_listings(search):
@@ -747,6 +828,7 @@ def kokuchpro_event_id(url):
 
 
 def normalize_kokuchpro_area(area):
+    area = (area or "").split()[0] if area else ""
     aliases = {
         "東京": "東京都",
         "大阪": "大阪府",
@@ -763,6 +845,7 @@ def normalize_kokuchpro_area(area):
 
 
 def normalize_doorkeeper_area(area):
+    area = (area or "").split()[0] if area else ""
     aliases = {
         "北海道": "hokkaido",
         "青森": "aomori",
@@ -1564,6 +1647,7 @@ def make_handler(config, sheets, csrf_token):
                         "eventSheetName": EVENT_SHEET_NAME,
                         "jobSheetName": JOB_SHEET_NAME,
                         "appMode": config["APP_MODE"],
+                        "webSearchAvailable": bool(config["BRAVE_SEARCH_API_KEY"]),
                     },
                 )
                 return
@@ -1639,7 +1723,7 @@ def make_handler(config, sheets, csrf_token):
 
         def handle_event_search(self, data):
             search = parse_event_search_input(data, min(config["MAX_RESULTS_PER_RUN"], 100))
-            result = search_connpass_events(search)
+            result = search_connpass_events(search, config["BRAVE_SEARCH_API_KEY"])
             sheet_result = (
                 append_events_to_sheet(sheets, config, result["items"])
                 if search["append"]
@@ -1654,6 +1738,7 @@ def make_handler(config, sheets, csrf_token):
                     "appended": sheet_result["appended"],
                     "skipped": sheet_result["skipped"],
                     "items": result["items"],
+                    "warnings": result.get("warnings", []),
                 },
             )
 

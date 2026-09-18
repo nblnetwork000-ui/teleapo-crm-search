@@ -29,17 +29,49 @@
             キーワード
             <input id="eventKeyword" name="keyword" type="text" maxlength="80" placeholder="例: 交流会" value="交流会" required />
           </label>
-          <label>
-            エリア
-            <input id="eventArea" name="area" type="text" maxlength="80" placeholder="例: 東京" />
-          </label>
+          <div class="grid">
+            <label>
+              都道府県
+              <select id="eventPrefecture" name="prefecture">
+                <option value="">全国</option>
+                <optgroup label="北海道・東北">
+                  <option>北海道</option><option>青森県</option><option>岩手県</option><option>宮城県</option><option>秋田県</option><option>山形県</option><option>福島県</option>
+                </optgroup>
+                <optgroup label="関東">
+                  <option>茨城県</option><option>栃木県</option><option>群馬県</option><option>埼玉県</option><option>千葉県</option><option>東京都</option><option>神奈川県</option>
+                </optgroup>
+                <optgroup label="甲信越・北陸">
+                  <option>新潟県</option><option>富山県</option><option>石川県</option><option>福井県</option><option>山梨県</option><option>長野県</option>
+                </optgroup>
+                <optgroup label="東海">
+                  <option>岐阜県</option><option>静岡県</option><option>愛知県</option><option>三重県</option>
+                </optgroup>
+                <optgroup label="関西">
+                  <option>滋賀県</option><option>京都府</option><option>大阪府</option><option>兵庫県</option><option>奈良県</option><option>和歌山県</option>
+                </optgroup>
+                <optgroup label="中国・四国">
+                  <option>鳥取県</option><option>島根県</option><option>岡山県</option><option>広島県</option><option>山口県</option><option>徳島県</option><option>香川県</option><option>愛媛県</option><option>高知県</option>
+                </optgroup>
+                <optgroup label="九州・沖縄">
+                  <option>福岡県</option><option>佐賀県</option><option>長崎県</option><option>熊本県</option><option>大分県</option><option>宮崎県</option><option>鹿児島県</option><option>沖縄県</option>
+                </optgroup>
+              </select>
+            </label>
+            <label>
+              市区町村・主要エリア
+              <select id="eventAreaDetail" name="areaDetail" disabled>
+                <option value="">都道府県を選択</option>
+              </select>
+            </label>
+          </div>
           <label>
             検索元
             <select id="eventSource" name="source">
               <option value="all">全部</option>
-              <option value="kokuchpro">こくちーず</option>
+              <option value="kokuchpro">こくちーず（取得制限あり）</option>
               <option value="connpass">connpass</option>
               <option value="doorkeeper">Doorkeeper</option>
+              <option id="eventWebSource" value="web" hidden disabled>Web検索</option>
             </select>
           </label>
           <div class="grid grid-three">
@@ -83,6 +115,7 @@
                 <th>会場</th>
                 <th>住所</th>
                 <th>参加</th>
+                <th>検索元</th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>

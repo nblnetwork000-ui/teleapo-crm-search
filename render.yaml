@@ -65,5 +65,7 @@ services:
         value: イベントリスト
       - key: GOOGLE_SERVICE_ACCOUNT_JSON_BASE64
         sync: false
+      - key: BRAVE_SEARCH_API_KEY
+        sync: false
       - key: VOICEVOX_SPEAKER
         value: 24
