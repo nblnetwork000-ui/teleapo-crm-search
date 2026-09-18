@@ -1724,11 +1724,15 @@ def make_handler(config, sheets, csrf_token):
         def handle_event_search(self, data):
             search = parse_event_search_input(data, min(config["MAX_RESULTS_PER_RUN"], 100))
             result = search_connpass_events(search, config["BRAVE_SEARCH_API_KEY"])
-            sheet_result = (
-                append_events_to_sheet(sheets, config, result["items"])
-                if search["append"]
-                else {"appended": 0, "skipped": 0}
-            )
+            warnings = list(result.get("warnings", []))
+            sheet_result = {"appended": 0, "skipped": 0}
+            if search["append"]:
+                try:
+                    sheet_result = append_events_to_sheet(sheets, config, result["items"])
+                except Exception as error:
+                    warnings.append(
+                        f"検索結果は取得できましたが、Googleシートへ追記できませんでした（{brief_external_error(error)}）"
+                    )
             self.send_json(
                 200,
                 {
@@ -1738,7 +1742,7 @@ def make_handler(config, sheets, csrf_token):
                     "appended": sheet_result["appended"],
                     "skipped": sheet_result["skipped"],
                     "items": result["items"],
-                    "warnings": result.get("warnings", []),
+                    "warnings": warnings,
                 },
             )
 
