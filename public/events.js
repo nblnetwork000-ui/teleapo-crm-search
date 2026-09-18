@@ -11,6 +11,7 @@ const rows = document.querySelector('#rows');
 const summary = document.querySelector('#summary');
 const statusBox = document.querySelector('#status');
 const sheetName = document.querySelector('#sheetName');
+const adminUsersLink = document.querySelector('#adminUsersLink');
 
 const AREA_DETAILS = {
   '北海道': ['札幌市', '函館市', '旭川市', '帯広市', '釧路市', '小樽市'],
@@ -62,6 +63,9 @@ sheetName.textContent = `追記先: ${appConfig.eventSheetName}`;
 if (appConfig.webSearchAvailable) {
   eventWebSource.hidden = false;
   eventWebSource.disabled = false;
+}
+if (appConfig.isAdmin) {
+  adminUsersLink.hidden = false;
 }
 
 eventForm.addEventListener('submit', async (event) => {

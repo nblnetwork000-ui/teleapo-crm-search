@@ -9,6 +9,7 @@ import re
 import secrets
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -41,6 +42,18 @@ SHOP_STATUS_COLORS = {
 SHOP_COLUMN_WIDTHS = [220, 150, 360, 130, 420]
 EVENT_SHEET_NAME = "イベントリスト"
 JOB_SHEET_NAME = "求人掲載店舗リスト"
+USER_SHEET_NAME = "SIGNALユーザー"
+USER_HEADERS = [
+    "メールアドレス",
+    "パスワードハッシュ",
+    "権限",
+    "状態",
+    "招待トークンハッシュ",
+    "招待期限",
+    "作成日時",
+    "更新日時",
+    "最終ログイン日時",
+]
 EVENT_HEADERS = [
     "取得日時",
     "イベント名",
@@ -197,6 +210,29 @@ def verify_password(password, stored_value):
     return hmac.compare_digest(actual, expected)
 
 
+def hash_password(password, iterations=310000):
+    if len(password) < 12:
+        raise InputError("パスワードは12文字以上で設定してください。")
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return "$".join(
+        [
+            "pbkdf2_sha256",
+            str(iterations),
+            base64.urlsafe_b64encode(salt).decode("ascii"),
+            base64.urlsafe_b64encode(digest).decode("ascii"),
+        ]
+    )
+
+
+def parse_email_list(raw_value):
+    return {
+        value.strip().lower()
+        for value in re.split(r"[,\s]+", raw_value or "")
+        if value.strip() and "@" in value
+    }
+
+
 def load_config():
     load_dotenv()
     app_mode = os.environ.get("APP_MODE", "full").strip().lower()
@@ -219,7 +255,11 @@ def load_config():
         "ACCESS_MEMBER_ID": os.environ.get("ACCESS_MEMBER_ID", ""),
         "ACCESS_PASSWORD": os.environ.get("ACCESS_PASSWORD") or os.environ.get("SHARE_PASSWORD", ""),
         "ACCESS_USERS": access_users,
+        "ADMIN_EMAILS": parse_email_list(os.environ.get("ADMIN_EMAILS", "nblnetwork.000@gmail.com")),
         "SESSION_SECRET": os.environ.get("SESSION_SECRET") or secrets.token_hex(32),
+        "APP_BASE_URL": os.environ.get("APP_BASE_URL", "").rstrip("/"),
+        "RESEND_API_KEY": os.environ.get("RESEND_API_KEY", ""),
+        "INVITE_FROM_EMAIL": os.environ.get("INVITE_FROM_EMAIL", "SIGNAL <onboarding@resend.dev>"),
         "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
         "OPENAI_MODEL": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
         "BRAVE_SEARCH_API_KEY": os.environ.get("BRAVE_SEARCH_API_KEY", ""),
@@ -1617,6 +1657,237 @@ class SheetsClient:
         return self.access_token
 
 
+class UserStore:
+    def __init__(self, sheets, config):
+        self.sheets = sheets
+        self.config = config
+        self.lock = threading.RLock()
+        self.initialized = False
+
+    def ensure_initialized(self):
+        with self.lock:
+            if self.initialized:
+                return
+            ensure_sheet_exists(self.sheets, self.config, USER_SHEET_NAME)
+            header_range = f"{quote_sheet_name(USER_SHEET_NAME)}!A1:I1"
+            values = self.sheets.get_values(self.config["GOOGLE_SHEET_ID"], header_range).get("values", [])
+            if not values or values[0] != USER_HEADERS:
+                self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], header_range, [USER_HEADERS])
+            if not self.list_users(skip_ensure=True) and self.config["ACCESS_USERS"]:
+                now = utc_timestamp()
+                rows = []
+                for email_address, password_hash in self.config["ACCESS_USERS"].items():
+                    rows.append(
+                        [
+                            email_address,
+                            password_hash,
+                            "admin" if email_address in self.config["ADMIN_EMAILS"] else "member",
+                            "active",
+                            "",
+                            "",
+                            now,
+                            now,
+                            "",
+                        ]
+                    )
+                self.sheets.append_values(
+                    self.config["GOOGLE_SHEET_ID"],
+                    f"{quote_sheet_name(USER_SHEET_NAME)}!A:I",
+                    rows,
+                )
+            elif not self.list_users(skip_ensure=True) and self.config.get("ACCESS_PASSWORD"):
+                now = utc_timestamp()
+                legacy_email = (self.config.get("ACCESS_MEMBER_ID") or "member").strip().lower()
+                self.sheets.append_values(
+                    self.config["GOOGLE_SHEET_ID"],
+                    f"{quote_sheet_name(USER_SHEET_NAME)}!A:I",
+                    [[legacy_email, self.config["ACCESS_PASSWORD"], "admin", "active", "", "", now, now, ""]],
+                )
+            self.initialized = True
+
+    def list_users(self, skip_ensure=False):
+        with self.lock:
+            if not skip_ensure:
+                self.ensure_initialized()
+            rows = self.sheets.get_values(
+                self.config["GOOGLE_SHEET_ID"], f"{quote_sheet_name(USER_SHEET_NAME)}!A2:I"
+            ).get("values", [])
+            users = []
+            for row_number, row in enumerate(rows, start=2):
+                padded = row + [""] * (9 - len(row))
+                email_address = padded[0].strip().lower()
+                if not email_address:
+                    continue
+                users.append(
+                    {
+                        "row": row_number,
+                        "email": email_address,
+                        "passwordHash": padded[1],
+                        "role": padded[2] or "member",
+                        "status": padded[3] or "disabled",
+                        "inviteTokenHash": padded[4],
+                        "inviteExpiresAt": padded[5],
+                        "createdAt": padded[6],
+                        "updatedAt": padded[7],
+                        "lastLoginAt": padded[8],
+                    }
+                )
+            return users
+
+    def find(self, email_address):
+        normalized = (email_address or "").strip().lower()
+        return next((user for user in self.list_users() if user["email"] == normalized), None)
+
+    def authenticate(self, email_address, password):
+        with self.lock:
+            user = self.find(email_address)
+            if not user or user["status"] != "active" or not user["passwordHash"]:
+                return None
+            if not verify_password(password, user["passwordHash"]):
+                return None
+            user["lastLoginAt"] = utc_timestamp()
+            user["updatedAt"] = user["lastLoginAt"]
+            self.write_user(user)
+            return user
+
+    def invite(self, email_address, base_url):
+        normalized = (email_address or "").strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+            raise InputError("有効なメールアドレスを入力してください。")
+        with self.lock:
+            existing = self.find(normalized)
+            if existing and existing["status"] == "active":
+                raise InputError("このメールアドレスはすでに利用中です。")
+            raw_token = secrets.token_urlsafe(32)
+            now = utc_timestamp()
+            expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(timespec="seconds")
+            user = existing or {
+                "row": None,
+                "email": normalized,
+                "createdAt": now,
+                "lastLoginAt": "",
+            }
+            user.update(
+                {
+                    "passwordHash": "",
+                    "role": user.get("role") or ("admin" if normalized in self.config["ADMIN_EMAILS"] else "member"),
+                    "status": "invited",
+                    "inviteTokenHash": token_hash(raw_token),
+                    "inviteExpiresAt": expires_at,
+                    "updatedAt": now,
+                }
+            )
+            self.write_user(user)
+            return f"{base_url}/invite?token={urllib.parse.quote(raw_token)}"
+
+    def accept_invite(self, raw_token, password):
+        if len(password) < 12:
+            raise InputError("パスワードは12文字以上で設定してください。")
+        candidate_hash = token_hash(raw_token)
+        with self.lock:
+            user = next(
+                (
+                    item
+                    for item in self.list_users()
+                    if item["status"] == "invited"
+                    and item["inviteTokenHash"]
+                    and hmac.compare_digest(item["inviteTokenHash"], candidate_hash)
+                ),
+                None,
+            )
+            if not user or invite_expired(user["inviteExpiresAt"]):
+                raise InputError("招待リンクが無効か、期限が切れています。管理者に再招待を依頼してください。")
+            now = utc_timestamp()
+            user.update(
+                {
+                    "passwordHash": hash_password(password),
+                    "status": "active",
+                    "inviteTokenHash": "",
+                    "inviteExpiresAt": "",
+                    "updatedAt": now,
+                }
+            )
+            self.write_user(user)
+            return user
+
+    def set_status(self, email_address, status, acting_email):
+        if status not in {"active", "disabled"}:
+            raise InputError("状態の指定が不正です。")
+        normalized = (email_address or "").strip().lower()
+        if normalized == (acting_email or "").strip().lower() and status == "disabled":
+            raise InputError("自分自身の利用を停止することはできません。")
+        with self.lock:
+            user = self.find(normalized)
+            if not user:
+                raise InputError("利用者が見つかりません。")
+            user["status"] = status
+            user["updatedAt"] = utc_timestamp()
+            self.write_user(user)
+
+    def write_user(self, user):
+        row = [
+            user.get("email", ""),
+            user.get("passwordHash", ""),
+            user.get("role", "member"),
+            user.get("status", "disabled"),
+            user.get("inviteTokenHash", ""),
+            user.get("inviteExpiresAt", ""),
+            user.get("createdAt", ""),
+            user.get("updatedAt", ""),
+            user.get("lastLoginAt", ""),
+        ]
+        if user.get("row"):
+            range_name = f"{quote_sheet_name(USER_SHEET_NAME)}!A{user['row']}:I{user['row']}"
+            self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], range_name, [row])
+        else:
+            response = self.sheets.append_values(
+                self.config["GOOGLE_SHEET_ID"], f"{quote_sheet_name(USER_SHEET_NAME)}!A:I", [row]
+            )
+            updated_range = response.get("updates", {}).get("updatedRange", "")
+            match = re.search(r"![A-Z]+(\d+):", updated_range)
+            if match:
+                user["row"] = int(match.group(1))
+
+
+def utc_timestamp():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def token_hash(raw_token):
+    return hashlib.sha256((raw_token or "").encode("utf-8")).hexdigest()
+
+
+def invite_expired(value):
+    try:
+        expires_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at <= datetime.now(timezone.utc)
+    except (TypeError, ValueError):
+        return True
+
+
+def send_invite_email(config, email_address, invite_url):
+    if not config["RESEND_API_KEY"]:
+        return False
+    request_json(
+        "https://api.resend.com/emails",
+        "POST",
+        {
+            "from": config["INVITE_FROM_EMAIL"],
+            "to": [email_address],
+            "subject": "SIGNALへの招待",
+            "html": (
+                "<p>SIGNALへ招待されました。</p>"
+                f'<p><a href="{html.escape(invite_url, quote=True)}">パスワードを設定して利用を開始する</a></p>'
+                "<p>このリンクの有効期限は24時間で、1回だけ使用できます。</p>"
+            ),
+        },
+        {"Authorization": f"Bearer {config['RESEND_API_KEY']}"},
+    )
+    return True
+
+
 def load_service_account_credentials(config):
     if config["GOOGLE_SERVICE_ACCOUNT_JSON_BASE64"]:
         raw = base64.b64decode(config["GOOGLE_SERVICE_ACCOUNT_JSON_BASE64"]).decode("utf-8")
@@ -2121,6 +2392,7 @@ def looks_like_timestamp(value):
 
 def make_handler(config, sheets, csrf_token):
     hits = {}
+    users = UserStore(sheets, config)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "LocalSearchSheets/1.0"
@@ -2132,6 +2404,10 @@ def make_handler(config, sheets, csrf_token):
             if parsed.path == "/login":
                 self.send_login_page()
                 return
+            if parsed.path == "/invite":
+                token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+                self.send_invite_page(token)
+                return
             if parsed.path == "/logout":
                 self.handle_logout()
                 return
@@ -2139,6 +2415,12 @@ def make_handler(config, sheets, csrf_token):
                 self.serve_static(parsed.path)
                 return
             if not self.require_login(config):
+                return
+            member = self.current_member(config)
+            if parsed.path == "/admin/users":
+                if not self.require_admin(member):
+                    return
+                self.send_admin_users_page(member)
                 return
             if config["APP_MODE"] == "events":
                 if parsed.path == "/":
@@ -2159,6 +2441,8 @@ def make_handler(config, sheets, csrf_token):
                         "jobSheetName": JOB_SHEET_NAME,
                         "appMode": config["APP_MODE"],
                         "webSearchAvailable": bool(config["BRAVE_SEARCH_API_KEY"]),
+                        "memberEmail": member,
+                        "isAdmin": self.is_admin(member),
                     },
                 )
                 return
@@ -2171,7 +2455,21 @@ def make_handler(config, sheets, csrf_token):
             if parsed.path == "/login":
                 self.handle_login(config)
                 return
+            if parsed.path == "/invite/accept":
+                self.handle_invite_accept(config)
+                return
             if not self.require_login(config):
+                return
+            member = self.current_member(config)
+            if parsed.path == "/admin/invite":
+                if not self.require_admin(member):
+                    return
+                self.handle_admin_invite(member)
+                return
+            if parsed.path == "/admin/users/status":
+                if not self.require_admin(member):
+                    return
+                self.handle_admin_status(member)
                 return
             if self.headers.get("x-csrf-token") != csrf_token:
                 self.send_json(403, {"error": "不正なリクエストです。画面を再読み込みしてください。"})
@@ -2295,13 +2593,11 @@ def make_handler(config, sheets, csrf_token):
             params = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
             member_id = ((params.get("email") or params.get("member_id")) or [""])[0].strip().lower()
             password = (params.get("password") or [""])[0]
-            if cfg["ACCESS_USERS"]:
-                expected_password = cfg["ACCESS_USERS"].get(member_id, "")
-                authenticated = bool(expected_password) and verify_password(password, expected_password)
-            else:
-                expected_id = (cfg["ACCESS_MEMBER_ID"] or member_id).strip().lower()
-                authenticated = secrets.compare_digest(member_id, expected_id) and secrets.compare_digest(password, cfg["ACCESS_PASSWORD"])
-            if authenticated:
+            try:
+                authenticated_user = users.authenticate(member_id, password)
+            except Exception:
+                authenticated_user = None
+            if authenticated_user:
                 cookie = make_session_cookie(member_id or "member", cfg["SESSION_SECRET"])
                 self.send_response(303)
                 self.send_security_headers()
@@ -2313,16 +2609,64 @@ def make_handler(config, sheets, csrf_token):
                 return
             self.send_login_page("メールアドレスまたはパスワードが違います。")
 
+        def handle_invite_accept(self, cfg):
+            params = self.read_form_body()
+            raw_token = params.get("token", "")
+            password = params.get("password", "")
+            password_confirm = params.get("password_confirm", "")
+            if password != password_confirm:
+                self.send_invite_page(raw_token, "確認用パスワードが一致しません。")
+                return
+            try:
+                user = users.accept_invite(raw_token, password)
+            except InputError as error:
+                self.send_invite_page(raw_token, str(error))
+                return
+            cookie = make_session_cookie(user["email"], cfg["SESSION_SECRET"])
+            self.send_response(303)
+            self.send_security_headers()
+            secure = "" if is_local_host(self.headers.get("Host", "")) else "; Secure"
+            self.send_header("Set-Cookie", f"crm_session={cookie}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400{secure}")
+            self.send_header("Location", "/events.html" if cfg["APP_MODE"] == "events" else "/crm/index.html")
+            self.end_headers()
+
+        def handle_admin_invite(self, member):
+            params = self.read_form_body()
+            if params.get("csrf_token") != csrf_token:
+                self.send_admin_users_page(member, "不正なリクエストです。画面を再読み込みしてください。", True)
+                return
+            try:
+                email_address = params.get("email", "").strip().lower()
+                base_url = config["APP_BASE_URL"] or request_base_url(self)
+                invite_url = users.invite(email_address, base_url)
+                sent = send_invite_email(config, email_address, invite_url)
+                message = "招待メールを送信しました。" if sent else "招待を作成しました。下のリンクを本人へ共有してください。"
+                self.send_admin_users_page(member, message, False, invite_url)
+            except (InputError, RuntimeError) as error:
+                self.send_admin_users_page(member, str(error), True)
+
+        def handle_admin_status(self, member):
+            params = self.read_form_body()
+            if params.get("csrf_token") != csrf_token:
+                self.send_admin_users_page(member, "不正なリクエストです。画面を再読み込みしてください。", True)
+                return
+            try:
+                users.set_status(params.get("email", ""), params.get("status", ""), member)
+                self.redirect("/admin/users")
+            except InputError as error:
+                self.send_admin_users_page(member, str(error), True)
+
         def require_login(self, cfg):
             if not cfg["ALLOW_REMOTE_ACCESS"] and not cfg["ACCESS_PASSWORD"]:
                 return True
             member_id = session_member_from_cookie(self.headers.get("Cookie", ""), cfg["SESSION_SECRET"])
             if member_id:
-                if cfg["ACCESS_USERS"] and member_id in cfg["ACCESS_USERS"]:
-                    return True
-                legacy_id = (cfg["ACCESS_MEMBER_ID"] or member_id).strip().lower()
-                if not cfg["ACCESS_USERS"] and secrets.compare_digest(member_id, legacy_id):
-                    return True
+                try:
+                    user = users.find(member_id)
+                    if user and user["status"] == "active":
+                        return True
+                except Exception:
+                    pass
             if self.path.startswith("/api/"):
                 self.send_json(401, {"error": "ログインしてください。"})
                 return False
@@ -2331,6 +2675,53 @@ def make_handler(config, sheets, csrf_token):
             self.send_header("Location", "/login")
             self.end_headers()
             return False
+
+        def current_member(self, cfg):
+            return session_member_from_cookie(self.headers.get("Cookie", ""), cfg["SESSION_SECRET"]) or ""
+
+        def is_admin(self, member):
+            try:
+                user = users.find(member)
+                if user:
+                    return user["status"] == "active" and user["role"] == "admin"
+            except Exception:
+                pass
+            return member in config["ADMIN_EMAILS"]
+
+        def require_admin(self, member):
+            if self.is_admin(member):
+                return True
+            self.send_json(403, {"error": "管理者のみ利用できます。"})
+            return False
+
+        def read_form_body(self):
+            length = min(int(self.headers.get("content-length", "0")), 16 * 1024)
+            parsed = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
+            return {key: values[0] if values else "" for key, values in parsed.items()}
+
+        def send_invite_page(self, token, error=""):
+            body = invite_page(token, error, config["APP_MODE"]).encode("utf-8")
+            self.send_response(200)
+            self.send_login_security_headers()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def send_admin_users_page(self, member, message="", is_error=False, invite_url=""):
+            try:
+                user_list = users.list_users()
+                body = admin_users_page(user_list, member, csrf_token, message, is_error, invite_url).encode("utf-8")
+            except Exception as error:
+                body = admin_users_page([], member, csrf_token, f"利用者一覧を取得できませんでした: {error}", True, "").encode("utf-8")
+            self.send_response(200)
+            self.send_login_security_headers()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
 
         def send_login_page(self, error=""):
             body = login_page(error, config["APP_MODE"]).encode("utf-8")
@@ -2688,6 +3079,128 @@ def login_page(error="", app_mode="full"):
     </main>
   </body>
 </html>"""
+
+
+def invite_page(token, error="", app_mode="events"):
+    product_name = "SIGNAL" if app_mode == "events" else "テレアポCRM"
+    message = f'<p class="message error">{html.escape(error)}</p>' if error else ""
+    safe_token = html.escape(token or "", quote=True)
+    disabled = " disabled" if not token else ""
+    return f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>パスワード設定 | {html.escape(product_name)}</title>
+  <link rel="icon" type="image/png" href="/assets/signal-icon.png" />
+  <style>
+    :root {{ color-scheme: dark; font-family: system-ui, sans-serif; background:#050814; color:#e5eefb; }}
+    * {{ box-sizing:border-box; }} body {{ margin:0; min-height:100vh; display:grid; place-items:center; padding:20px; background:radial-gradient(circle at 50% 15%,#12355a,#050814 48%); }}
+    main {{ width:min(440px,100%); padding:26px; background:rgb(8 13 24 / 88%); border:1px solid rgb(255 255 255 / 14%); border-radius:12px; box-shadow:0 24px 80px #0008; }}
+    .brand {{ color:#38bdf8; font-weight:950; letter-spacing:.08em; }} h1 {{ margin:8px 0; }} p {{ color:#b7c6dc; line-height:1.7; }}
+    form,label {{ display:grid; gap:8px; }} form {{ gap:15px; margin-top:20px; }} label {{ font-size:13px; font-weight:800; }}
+    input {{ width:100%; padding:12px; border:1px solid #ffffff25; border-radius:8px; background:#081120; color:#fff; font:inherit; }}
+    button {{ padding:13px; border:0; border-radius:8px; background:#38bdf8; color:#06101d; font-weight:900; cursor:pointer; }}
+    .error {{ color:#fecaca; background:#451a1acc; padding:10px 12px; border-radius:8px; }} a {{ color:#7dd3fc; }}
+  </style>
+</head>
+<body><main>
+  <div class="brand">SIGNAL</div>
+  <h1>パスワード設定</h1>
+  <p>12文字以上のパスワードを設定してください。設定後、そのままSIGNALへログインします。</p>
+  {message}
+  <form method="post" action="/invite/accept">
+    <input type="hidden" name="token" value="{safe_token}" />
+    <label>パスワード<input name="password" type="password" minlength="12" autocomplete="new-password" required{disabled} /></label>
+    <label>パスワード（確認）<input name="password_confirm" type="password" minlength="12" autocomplete="new-password" required{disabled} /></label>
+    <button type="submit"{disabled}>設定して利用を開始</button>
+  </form>
+  <p><a href="/login">ログイン画面へ戻る</a></p>
+</main></body></html>"""
+
+
+def admin_users_page(user_list, member, csrf_token, message="", is_error=False, invite_url=""):
+    status_labels = {"active": "利用中", "invited": "招待中", "disabled": "停止中"}
+    rows = []
+    for user in user_list:
+        if user["status"] == "invited":
+            action = f"""
+          <form method="post" action="/admin/invite">
+            <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}" />
+            <input type="hidden" name="email" value="{html.escape(user['email'], quote=True)}" />
+            <button class="secondary" type="submit">再招待</button>
+          </form>"""
+        else:
+            next_status = "disabled" if user["status"] == "active" else "active"
+            action_label = "利用停止" if next_status == "disabled" else "利用再開"
+            action = "—" if user["email"] == member else f"""
+          <form method="post" action="/admin/users/status">
+            <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}" />
+            <input type="hidden" name="email" value="{html.escape(user['email'], quote=True)}" />
+            <input type="hidden" name="status" value="{next_status}" />
+            <button class="secondary" type="submit">{action_label}</button>
+          </form>"""
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(user['email'])}</td>"
+            f"<td>{'管理者' if user['role'] == 'admin' else '利用者'}</td>"
+            f"<td><span class=\"status {html.escape(user['status'])}\">{status_labels.get(user['status'], user['status'])}</span></td>"
+            f"<td>{html.escape(format_admin_date(user['updatedAt']))}</td>"
+            f"<td>{action}</td>"
+            "</tr>"
+        )
+    notice = ""
+    if message:
+        notice = f'<p class="notice{" error" if is_error else ""}">{html.escape(message)}</p>'
+    link_panel = ""
+    if invite_url:
+        safe_url = html.escape(invite_url, quote=True)
+        link_panel = f'<div class="inviteLink"><strong>招待リンク</strong><input value="{safe_url}" readonly onclick="this.select()" /><small>メール送信未設定の場合は、このリンクを本人へ共有してください。</small></div>'
+    return f"""<!doctype html>
+<html lang="ja"><head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>利用者管理 | SIGNAL</title><link rel="icon" type="image/png" href="/assets/signal-icon.png" />
+  <style>
+    :root {{ color-scheme:dark; font-family:system-ui,sans-serif; background:#050814; color:#e5eefb; }} * {{ box-sizing:border-box; }} body {{ margin:0; }}
+    main {{ width:min(1050px,calc(100% - 28px)); margin:28px auto; }} header {{ display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:20px; }}
+    h1 {{ margin:4px 0; }} .brand {{ color:#38bdf8; font-weight:950; letter-spacing:.08em; }} a {{ color:#7dd3fc; }}
+    section {{ background:#0b1323; border:1px solid #ffffff18; border-radius:12px; padding:20px; margin-bottom:20px; }}
+    form {{ display:flex; gap:10px; align-items:end; flex-wrap:wrap; }} label {{ display:grid; gap:7px; min-width:min(360px,100%); font-size:13px; font-weight:800; }}
+    input {{ padding:11px 12px; border:1px solid #ffffff25; border-radius:8px; background:#081120; color:#fff; font:inherit; }}
+    button {{ padding:11px 15px; border:0; border-radius:8px; background:#38bdf8; color:#06101d; font-weight:900; cursor:pointer; }} button.secondary {{ background:#24344d; color:#e5eefb; padding:8px 10px; }}
+    table {{ width:100%; border-collapse:collapse; }} th,td {{ text-align:left; padding:12px 10px; border-bottom:1px solid #ffffff14; }} th {{ color:#91a7c4; font-size:12px; }}
+    .status {{ display:inline-block; padding:5px 8px; border-radius:999px; font-size:12px; font-weight:850; background:#334155; }} .status.active {{ background:#14532d; }} .status.invited {{ background:#854d0e; }}
+    .notice {{ padding:11px 13px; border-radius:8px; background:#0c4a6e; }} .notice.error {{ background:#611c1c; }} .inviteLink {{ display:grid; gap:8px; margin-top:14px; }} small {{ color:#9fb0c7; }}
+    @media(max-width:720px) {{ .tableWrap {{ overflow:auto; }} table {{ min-width:720px; }} header {{ align-items:flex-start; flex-direction:column; }} }}
+  </style>
+</head><body><main>
+  <header><div><div class="brand">SIGNAL</div><h1>利用者管理</h1><div>{html.escape(member)}</div></div><a href="/events.html">イベント検索へ戻る</a></header>
+  <section><h2>利用者を招待</h2><p>招待リンクは24時間・1回限り有効です。</p>{notice}
+    <form method="post" action="/admin/invite">
+      <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}" />
+      <label>メールアドレス<input name="email" type="email" required placeholder="user@example.com" /></label>
+      <button type="submit">招待を発行</button>
+    </form>{link_panel}
+  </section>
+  <section><h2>登録済み利用者</h2><div class="tableWrap"><table><thead><tr><th>メールアドレス</th><th>権限</th><th>状態</th><th>更新</th><th>操作</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
+</main></body></html>"""
+
+
+def format_admin_date(value):
+    if not value:
+        return "—"
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(JST)
+        return parsed.strftime("%Y/%m/%d %H:%M")
+    except ValueError:
+        return value
+
+
+def request_base_url(handler):
+    forwarded_proto = handler.headers.get("X-Forwarded-Proto", "")
+    scheme = forwarded_proto.split(",", 1)[0].strip() or ("http" if is_local_host(handler.headers.get("Host", "")) else "https")
+    host = handler.headers.get("Host", "localhost")
+    return f"{scheme}://{host}"
 
 def is_local_host(host_header):
     host = host_header.split(":", 1)[0]

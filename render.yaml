@@ -59,6 +59,14 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      - key: ADMIN_EMAILS
+        value: nblnetwork.000@gmail.com
+      - key: APP_BASE_URL
+        value: https://signal-event-search.onrender.com
+      - key: RESEND_API_KEY
+        sync: false
+      - key: INVITE_FROM_EMAIL
+        value: SIGNAL <onboarding@resend.dev>
       - key: GOOGLE_SHEET_ID
         sync: false
       - key: GOOGLE_SHEET_NAME

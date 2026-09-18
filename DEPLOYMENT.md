@@ -30,8 +30,27 @@ OPENAI_MODEL=gpt-5
 
 ## 招待ユーザーの発行
 
-1. `python3 scripts/hash_password.py` を実行し、12文字以上の初期パスワードからハッシュを作ります。
-2. Renderの `ACCESS_USERS_JSON` に、発行を許可するメールアドレスだけを登録します。
+SIGNALの管理者でログインし、イベント検索画面の「利用者管理」を開きます。
+
+1. 招待するメールアドレスを入力します。
+2. 招待を発行します。
+3. 利用者は24時間有効・1回限りの招待リンクから12文字以上のパスワードを設定します。
+4. 設定後は、そのメールアドレスとパスワードでログインできます。
+
+利用者情報は同じGoogleスプレッドシートの `SIGNALユーザー` シートに保存されます。管理画面から利用停止・再開・再招待ができます。
+
+メールを自動送信する場合はRenderへ以下を設定します。
+
+```text
+RESEND_API_KEY=ResendのAPIキー
+INVITE_FROM_EMAIL=SIGNAL <invite@example.com>
+APP_BASE_URL=https://signal-event-search.onrender.com
+ADMIN_EMAILS=nblnetwork.000@gmail.com
+```
+
+`RESEND_API_KEY` が未設定でも招待は発行でき、管理画面に表示された招待リンクを本人へ共有できます。
+
+既存環境から初回移行するときだけ、`ACCESS_USERS_JSON` の利用者を自動的に台帳へ取り込みます。
 
 ```json
 {
@@ -40,7 +59,7 @@ OPENAI_MODEL=gpt-5
 }
 ```
 
-未登録のメールアドレスではログインできません。利用停止する場合は対象メールをJSONから削除します。既存セッションも次回アクセス時に登録一覧と照合されます。
+未登録のメールアドレスではログインできません。利用停止すると既存セッションも次回アクセス時から無効になります。
 
 ## SIGNAL イベント検索専用版
 
