@@ -135,10 +135,56 @@ def int_env(name, default, minimum, maximum):
     return value
 
 
+def parse_access_users(raw_value):
+    if not raw_value:
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("ACCESS_USERS_JSON は正しいJSONで設定してください。") from error
+
+    if isinstance(parsed, dict):
+        entries = parsed.items()
+    elif isinstance(parsed, list):
+        entries = ((item.get("email"), item.get("password")) for item in parsed if isinstance(item, dict))
+    else:
+        raise RuntimeError("ACCESS_USERS_JSON はメールアドレスとパスワードの一覧で設定してください。")
+
+    users = {}
+    for email_address, password in entries:
+        normalized_email = str(email_address or "").strip().lower()
+        normalized_password = str(password or "")
+        if not normalized_email or "@" not in normalized_email or not normalized_password:
+            raise RuntimeError("ACCESS_USERS_JSON の各ユーザーには有効なメールアドレスとパスワードが必要です。")
+        users[normalized_email] = normalized_password
+    if not users:
+        raise RuntimeError("ACCESS_USERS_JSON に1件以上のユーザーを設定してください。")
+    return users
+
+
+def verify_password(password, stored_value):
+    if not stored_value.startswith("pbkdf2_sha256$"):
+        return secrets.compare_digest(password, stored_value)
+    try:
+        _, iterations_text, salt_text, expected_text = stored_value.split("$", 3)
+        iterations = int(iterations_text)
+        salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
+        expected = base64.urlsafe_b64decode(expected_text.encode("ascii"))
+    except (ValueError, UnicodeError):
+        return False
+    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return hmac.compare_digest(actual, expected)
+
+
 def load_config():
     load_dotenv()
+    app_mode = os.environ.get("APP_MODE", "full").strip().lower()
+    if app_mode not in {"full", "events"}:
+        raise RuntimeError("APP_MODE は full または events を設定してください。")
+    access_users = parse_access_users(os.environ.get("ACCESS_USERS_JSON", ""))
     config = {
-        "YAHOO_CLIENT_ID": required_env("YAHOO_CLIENT_ID"),
+        "APP_MODE": app_mode,
+        "YAHOO_CLIENT_ID": os.environ.get("YAHOO_CLIENT_ID", ""),
         "GOOGLE_SHEET_ID": required_env("GOOGLE_SHEET_ID"),
         "GOOGLE_SHEET_NAME": os.environ.get("GOOGLE_SHEET_NAME", "店舗リスト"),
         "GOOGLE_SERVICE_ACCOUNT_JSON_BASE64": os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_BASE64"),
@@ -151,6 +197,7 @@ def load_config():
         "ALLOW_REMOTE_ACCESS": os.environ.get("ALLOW_REMOTE_ACCESS", "false") == "true",
         "ACCESS_MEMBER_ID": os.environ.get("ACCESS_MEMBER_ID", ""),
         "ACCESS_PASSWORD": os.environ.get("ACCESS_PASSWORD") or os.environ.get("SHARE_PASSWORD", ""),
+        "ACCESS_USERS": access_users,
         "SESSION_SECRET": os.environ.get("SESSION_SECRET") or secrets.token_hex(32),
         "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
         "OPENAI_MODEL": os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
@@ -159,8 +206,10 @@ def load_config():
     }
     if config["HOST"] not in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
         raise RuntimeError("HOST は 127.0.0.1 / localhost / ::1 / 0.0.0.0 のいずれかにしてください。")
-    if config["ALLOW_REMOTE_ACCESS"] and not config["ACCESS_PASSWORD"]:
-        raise RuntimeError("公開利用時は ACCESS_PASSWORD を .env に設定してください。")
+    if config["APP_MODE"] == "full" and not config["YAHOO_CLIENT_ID"]:
+        raise RuntimeError("通常版では環境変数 YAHOO_CLIENT_ID を設定してください。")
+    if config["ALLOW_REMOTE_ACCESS"] and not config["ACCESS_USERS"] and not config["ACCESS_PASSWORD"]:
+        raise RuntimeError("公開利用時は ACCESS_USERS_JSON または ACCESS_PASSWORD を設定してください。")
     if not config["GOOGLE_SERVICE_ACCOUNT_JSON_BASE64"] and not config["GOOGLE_APPLICATION_CREDENTIALS"]:
         raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 または GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
     return config
@@ -1462,11 +1511,18 @@ def make_handler(config, sheets, csrf_token):
             if parsed.path == "/logout":
                 self.handle_logout()
                 return
-            if parsed.path in {"/login-bg.jpg", "/login-bg.mp4"}:
+            if parsed.path in {"/login-bg.jpg", "/login-bg.mp4", "/assets/signal-icon.png", "/assets/signal-logo.png"}:
                 self.serve_static(parsed.path)
                 return
             if not self.require_login(config):
                 return
+            if config["APP_MODE"] == "events":
+                if parsed.path == "/":
+                    self.redirect("/events.html")
+                    return
+                if parsed.path == "/local-search.html" or parsed.path.startswith("/crm/"):
+                    self.redirect("/events.html")
+                    return
             if parsed.path == "/api/config":
                 self.send_json(
                     200,
@@ -1477,6 +1533,7 @@ def make_handler(config, sheets, csrf_token):
                         "sheetName": config["GOOGLE_SHEET_NAME"],
                         "eventSheetName": EVENT_SHEET_NAME,
                         "jobSheetName": JOB_SHEET_NAME,
+                        "appMode": config["APP_MODE"],
                     },
                 )
                 return
@@ -1498,6 +1555,9 @@ def make_handler(config, sheets, csrf_token):
                 data = self.read_json_body()
                 if self.path == "/api/events/search-and-append":
                     self.handle_event_search(data)
+                    return
+                if config["APP_MODE"] == "events":
+                    self.send_json(404, {"error": "イベント検索専用版では利用できない機能です。"})
                     return
                 if self.path == "/api/jobs/search-and-append":
                     self.handle_job_search(data)
@@ -1602,24 +1662,36 @@ def make_handler(config, sheets, csrf_token):
         def handle_login(self, cfg):
             length = min(int(self.headers.get("content-length", "0")), 4096)
             params = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8"))
-            member_id = (params.get("member_id") or [""])[0]
+            member_id = ((params.get("email") or params.get("member_id")) or [""])[0].strip().lower()
             password = (params.get("password") or [""])[0]
-            expected_id = cfg["ACCESS_MEMBER_ID"] or member_id
-            if secrets.compare_digest(member_id, expected_id) and secrets.compare_digest(password, cfg["ACCESS_PASSWORD"]):
+            if cfg["ACCESS_USERS"]:
+                expected_password = cfg["ACCESS_USERS"].get(member_id, "")
+                authenticated = bool(expected_password) and verify_password(password, expected_password)
+            else:
+                expected_id = (cfg["ACCESS_MEMBER_ID"] or member_id).strip().lower()
+                authenticated = secrets.compare_digest(member_id, expected_id) and secrets.compare_digest(password, cfg["ACCESS_PASSWORD"])
+            if authenticated:
                 cookie = make_session_cookie(member_id or "member", cfg["SESSION_SECRET"])
                 self.send_response(303)
                 self.send_security_headers()
-                self.send_header("Set-Cookie", f"crm_session={cookie}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400")
-                self.send_header("Location", "/crm/index.html")
+                secure = "" if is_local_host(self.headers.get("Host", "")) else "; Secure"
+                self.send_header("Set-Cookie", f"crm_session={cookie}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400{secure}")
+                destination = "/events.html" if cfg["APP_MODE"] == "events" else "/crm/index.html"
+                self.send_header("Location", destination)
                 self.end_headers()
                 return
-            self.send_login_page("会員IDまたはパスワードが違います。")
+            self.send_login_page("メールアドレスまたはパスワードが違います。")
 
         def require_login(self, cfg):
             if not cfg["ALLOW_REMOTE_ACCESS"] and not cfg["ACCESS_PASSWORD"]:
                 return True
-            if valid_session_cookie(self.headers.get("Cookie", ""), cfg["SESSION_SECRET"]):
-                return True
+            member_id = session_member_from_cookie(self.headers.get("Cookie", ""), cfg["SESSION_SECRET"])
+            if member_id:
+                if cfg["ACCESS_USERS"] and member_id in cfg["ACCESS_USERS"]:
+                    return True
+                legacy_id = (cfg["ACCESS_MEMBER_ID"] or member_id).strip().lower()
+                if not cfg["ACCESS_USERS"] and secrets.compare_digest(member_id, legacy_id):
+                    return True
             if self.path.startswith("/api/"):
                 self.send_json(401, {"error": "ログインしてください。"})
                 return False
@@ -1630,7 +1702,7 @@ def make_handler(config, sheets, csrf_token):
             return False
 
         def send_login_page(self, error=""):
-            body = login_page(error).encode("utf-8")
+            body = login_page(error, config["APP_MODE"]).encode("utf-8")
             self.send_response(200)
             self.send_login_security_headers()
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1638,6 +1710,12 @@ def make_handler(config, sheets, csrf_token):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+
+        def redirect(self, location):
+            self.send_response(303)
+            self.send_security_headers()
+            self.send_header("Location", location)
+            self.end_headers()
 
         def serve_static(self, request_path):
             safe_path = "index.html" if request_path == "/" else request_path.lstrip("/")
@@ -1841,7 +1919,7 @@ def make_session_cookie(member_id, secret):
     return f"{payload}:{signature}"
 
 
-def valid_session_cookie(cookie_header, secret):
+def session_member_from_cookie(cookie_header, secret):
     cookies = {}
     for part in (cookie_header or "").split(";"):
         if "=" in part:
@@ -1850,26 +1928,30 @@ def valid_session_cookie(cookie_header, secret):
     raw = cookies.get("crm_session", "")
     parts = raw.split(":")
     if len(parts) != 3:
-        return False
+        return None
     member_id, issued_at, signature = parts
     try:
         if int(time.time()) - int(issued_at) > 86400:
-            return False
+            return None
     except ValueError:
-        return False
+        return None
     payload = f"{member_id}:{issued_at}"
     expected = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(signature, expected)
+    return member_id if hmac.compare_digest(signature, expected) else None
 
 
-def login_page(error=""):
+def login_page(error="", app_mode="full"):
     error_html = f'<p class="error">{html.escape(error)}</p>' if error else ""
+    product_name = "SIGNAL" if app_mode == "events" else "テレアポCRM"
+    eyebrow = "SIGNAL" if app_mode == "events" else "Teleapo Command CRM"
+    description = "メールアドレスとパスワードを入力して、イベント検索に入ります。" if app_mode == "events" else "メールアドレスとパスワードを入力して、CRMと検索システムに入ります。"
     return """<!doctype html>
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>会員ログイン | テレアポCRM</title>
+    <title>ログイン | """ + product_name + """</title>
+    """ + ('<link rel="icon" type="image/png" href="/assets/signal-icon.png" />' if app_mode == "events" else '') + """
     <style>
       :root {
         color-scheme: dark;
@@ -1912,6 +1994,9 @@ def login_page(error=""):
         gap: 18px;
       }
       .brandRow { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
+      .signalBrand { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+      .signalBrand img { width: 48px; height: 48px; object-fit: contain; filter: drop-shadow(0 0 10px rgb(56 189 248 / 20%)); }
+      .signalBrand span { color: var(--text); font-size: 31px; font-weight: 950; letter-spacing: .035em; line-height: 1; }
       .eyebrow { margin: 0 0 7px; color: var(--accent); font-size: 11px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
       h1 { margin: 0; font-size: 30px; line-height: 1.12; }
       p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
@@ -1956,23 +2041,18 @@ def login_page(error=""):
       <section class="loginCard" aria-labelledby="loginTitle">
         <div class="brandRow">
           <div>
-            <p class="eyebrow">Teleapo Command CRM</p>
-            <h1 id="loginTitle">会員ログイン</h1>
+            """ + ('<div class="signalBrand" aria-label="SIGNAL"><img src="/assets/signal-icon.png" alt="" /><span>SIGNAL</span></div>' if app_mode == "events" else '<p class="eyebrow">' + eyebrow + '</p>') + """
+            <h1 id="loginTitle">ログイン</h1>
           </div>
           <button id="modeToggle" class="modeToggle" type="button">ライト</button>
         </div>
-        <p>会員IDとパスワードを入力して、CRMと検索システムに入ります。</p>
+        <p>""" + description + """</p>
         """ + error_html + """
         <form method="post" action="/login">
-          <label>会員ID<input name="member_id" autocomplete="username" required autofocus /></label>
+          <label>メールアドレス<input name="email" type="email" autocomplete="username" required autofocus /></label>
           <label>パスワード<input name="password" type="password" autocomplete="current-password" required /></label>
           <button type="submit">ログイン</button>
         </form>
-        <div class="hintRow" aria-label="機能">
-          <span class="chip">CRM</span>
-          <span class="chip">店舗検索</span>
-          <span class="chip">架電メモ</span>
-        </div>
       </section>
     </main>
   </body>

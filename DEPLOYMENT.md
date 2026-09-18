@@ -12,8 +12,7 @@ GitHubにコードを置き、RenderなどのWebサーバーへデプロイし�
 必須:
 
 ```text
-ACCESS_MEMBER_ID=ログイン用ID
-ACCESS_PASSWORD=ログイン用パスワード
+ACCESS_USERS_JSON=発行したメールアドレスとパスワードハッシュのJSON
 YAHOO_CLIENT_ID=YahooローカルサーチAPIのClient ID
 GOOGLE_SHEET_ID=追記先スプレッドシートID
 GOOGLE_SERVICE_ACCOUNT_JSON_BASE64=GoogleサービスアカウントJSONのBase64
@@ -28,6 +27,24 @@ OPENAI_MODEL=gpt-5
 
 4. デプロイ完了後、RenderのURLの `/login` を開きます。
 5. スマホ・タブレット・別PCでも同じURLでログインできます。
+
+## 招待ユーザーの発行
+
+1. `python3 scripts/hash_password.py` を実行し、12文字以上の初期パスワードからハッシュを作ります。
+2. Renderの `ACCESS_USERS_JSON` に、発行を許可するメールアドレスだけを登録します。
+
+```json
+{
+  "user1@example.com": "pbkdf2_sha256$...",
+  "user2@example.com": "pbkdf2_sha256$..."
+}
+```
+
+未登録のメールアドレスではログインできません。利用停止する場合は対象メールをJSONから削除します。既存セッションも次回アクセス時に登録一覧と照合されます。
+
+## SIGNAL イベント検索専用版
+
+`render.yaml` の `signal-event-search` サービスは `APP_MODE=events` で起動します。店舗検索、求人検索、CRM画面とそれらのAPIは利用できず、ログイン後はイベント検索画面だけが表示されます。
 
 ## 注意
 
