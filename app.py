@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as datetime_time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -101,6 +102,25 @@ EVENT_BUSINESS_KEYWORDS = (
     "財務",
     "資金調達",
 )
+EXTERNAL_EVENT_SOURCES = {
+    "doomo": ("Doomo", "https://doomo.jp/event"),
+    "clip_tokyo": ("CLIP TOKYO", "https://clip-tokyo.jp/event/"),
+    "passion_leaders": ("Passion Leaders", "https://members.passion-leaders.com/event_schedule/"),
+    "tact": ("TACT", "https://tact-business.jp/"),
+    "friendlink": ("フレンドリンク", "https://friendlink.jp/"),
+    "lepane": ("レパン", "https://lepane.net/"),
+    "hive_lab": ("Hive Lab", "https://www.hive-lab.jp/"),
+    "kobushi": ("KOBUSHI BEER", "https://kobushibeer.connpass.com/"),
+    "onlystory": ("OnlyStory", "https://onlystory.co.jp/service/seminar_event_c/event/"),
+    "first_village": ("First Village", "https://firstvillage.co.jp/event/"),
+    "keizaikai": ("経済界倶楽部", "https://club.keizaikai.co.jp/event/"),
+    "flos": ("フロース", "https://flos32.com/events/"),
+    "osaka_plus": ("OSAKA Plus", "https://osaka-plus.com/"),
+    "deal_den": ("Deal Den", "https://dealden.co.jp/"),
+    "cxo_meetup": ("CxO交流会カレンダー", "https://cxo-meetup.com/events"),
+    "doyu": ("中小企業家同友会", "https://www.doyu.jp/schedule"),
+    "eventmado": ("イベマド", "https://evemado.jp/"),
+}
 
 
 class InputError(Exception):
@@ -252,7 +272,8 @@ def parse_search_input(data, max_results):
 
 def parse_event_search_input(data, max_results):
     source = data.get("source", "connpass")
-    if source not in {"connpass", "kokuchpro", "doorkeeper", "web", "all"}:
+    allowed_sources = {"connpass", "kokuchpro", "doorkeeper", "web", "all", *EXTERNAL_EVENT_SOURCES}
+    if source not in allowed_sources:
         raise InputError("検索元の指定が不正です。")
     return {
         "keyword": clean_text(data.get("keyword"), "キーワード"),
@@ -312,7 +333,7 @@ def request_json(url, method="GET", body=None, headers=None):
         raise RuntimeError(f"外部APIでエラーが発生しました: HTTP {error.code} {details[:300]}")
 
 
-def request_text(url, headers=None):
+def request_text(url, headers=None, timeout=30):
     req = urllib.request.Request(
         url,
         method="GET",
@@ -323,7 +344,7 @@ def request_text(url, headers=None):
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             return response.read().decode(charset, errors="replace")
     except urllib.error.HTTPError as error:
@@ -372,8 +393,10 @@ def search_connpass_events(search, brave_search_api_key=""):
         if not brave_search_api_key:
             raise InputError("Web検索APIが未設定です。管理者に設定を依頼してください。")
         events = search_web_events(brave_search_api_key, search)
+    elif search["source"] in EXTERNAL_EVENT_SOURCES:
+        events = scrape_external_event_source(search["source"], search)
     else:
-        source_searches = (
+        source_searches = [
             ("connpass", lambda: scrape_connpass_search(keyword, search["start"], search["results"], search["futureOnly"])),
             (
                 "こくちーず",
@@ -387,15 +410,28 @@ def search_connpass_events(search, brave_search_api_key=""):
                     search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"]
                 ),
             ),
+        ]
+        source_searches.extend(
+            (
+                source_name,
+                lambda source_id=source_id: scrape_external_event_source(source_id, search),
+            )
+            for source_id, (source_name, _source_url) in EXTERNAL_EVENT_SOURCES.items()
         )
         successful_sources = []
         if brave_search_api_key:
-            source_searches += (("Web検索", lambda: search_web_events(brave_search_api_key, search)),)
-        for source_name, source_search in source_searches:
-            try:
-                successful_sources.append(source_search())
-            except Exception as error:
-                warnings.append(f"{source_name}は一時取得できませんでした（{brief_external_error(error)}）")
+            source_searches.append(("Web検索", lambda: search_web_events(brave_search_api_key, search)))
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            pending = {
+                executor.submit(source_search): source_name
+                for source_name, source_search in source_searches
+            }
+            for future in as_completed(pending):
+                source_name = pending[future]
+                try:
+                    successful_sources.append(future.result())
+                except Exception as error:
+                    warnings.append(f"{source_name}は一時取得できませんでした（{brief_external_error(error)}）")
         if not successful_sources:
             raise RuntimeError("すべてのイベント検索元から取得できませんでした。しばらく待って再試行してください。")
         events = merge_event_sources(*successful_sources)[: search["results"]]
@@ -404,7 +440,7 @@ def search_connpass_events(search, brave_search_api_key=""):
         "total": len(events),
         "count": len(events),
         "items": events,
-        "warnings": warnings,
+        "warnings": summarize_warnings(warnings),
     }
 
 
@@ -415,6 +451,419 @@ def brief_external_error(error):
     if http_status:
         return f"HTTP {http_status.group(1)}"
     return message[:120] or "取得エラー"
+
+
+def summarize_warnings(warnings):
+    if len(warnings) <= 3:
+        return warnings
+    return warnings[:3] + [f"ほか{len(warnings) - 3}件の検索元は一時取得できませんでした。"]
+
+
+def scrape_external_event_source(source_id, search):
+    source_name, source_url = EXTERNAL_EVENT_SOURCES[source_id]
+    text = request_text(source_url, timeout=15)
+    items = parse_external_event_html(text, source_url, source_name, search["keyword"])
+    if search["futureOnly"]:
+        today = today_local_date()
+        items = [item for item in items if is_event_today_or_later(item["startedAt"], today)]
+    items = filter_events_by_area(items, search["area"])
+    offset = max(0, search["start"] - 1)
+    return items[offset : offset + search["results"]]
+
+
+def parse_external_event_html(text, page_url, source_name, keyword):
+    items = [
+        item for item in parse_external_jsonld_events(text, page_url, source_name)
+        if external_keyword_matches(keyword, event_searchable_text(item))
+    ]
+    known_items = parse_known_external_events(text, page_url, source_name, keyword)
+    if known_items:
+        return merge_event_sources(*([items, known_items] if items else [known_items]))
+    seen = {(item["url"], item["startedAt"]) for item in items}
+    generic_labels = {
+        "イベント", "イベント一覧", "イベントページ一覧", "交流会", "詳細", "詳細を見る",
+        "開催予定", "開催日程を見る", "交流会の全日程を確認する", "もっと見る", "more",
+        "お申し込み", "お申し込みはこちら", "ビジネスサポート", source_name.lower(),
+    }
+    patterns = (
+        r'<a\b[^>]*?href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        r'<h[2-4]\b[^>]*>(.*?)</h[2-4]>',
+    )
+    for pattern_index, pattern in enumerate(patterns):
+        for match in re.finditer(pattern, text or "", re.I | re.S):
+            href = match.group(1) if pattern_index == 0 else ""
+            title_html = match.group(2) if pattern_index == 0 else match.group(1)
+            title = clean_html(title_html)
+            context_raw = text[max(0, match.start() - 220) : min(len(text), match.end() + 760)]
+            context = clean_html(context_raw)
+            if len(title) < 4 or title.lower() in generic_labels:
+                title = derive_external_title(context_raw, source_name)
+            if len(title) < 4 or title.lower() in generic_labels:
+                continue
+            if not looks_like_external_event(title, context):
+                continue
+            if not external_keyword_matches(keyword, f"{title} {context}"):
+                continue
+            if not href:
+                link_match = re.search(r'<a\b[^>]*?href=["\']([^"\']+)["\']', text[match.end() : match.end() + 1200], re.I)
+                href = link_match.group(1) if link_match else page_url
+            url = urllib.parse.urljoin(page_url, html.unescape(href))
+            if not url.startswith(("http://", "https://")):
+                continue
+            datetimes = parse_external_datetimes(title)
+            if not datetimes:
+                datetimes = parse_external_datetimes(context)
+            for started_at in datetimes[:8]:
+                key = (url, started_at)
+                if key in seen:
+                    continue
+                seen.add(key)
+                summary = re.sub(r"\s+", " ", context).strip()
+                items.append(
+                    make_external_event(
+                        title=title[:220],
+                        started_at=started_at,
+                        place=extract_external_location(f"{title} {context}"),
+                        address=summary[:320],
+                        url=url,
+                        source_name=source_name,
+                    )
+                )
+    items.sort(key=lambda item: item.get("startedAt") or "")
+    return items
+
+
+def parse_known_external_events(text, page_url, source_name, keyword):
+    parsers = {
+        "Doomo": parse_doomo_events,
+        "CLIP TOKYO": parse_clip_tokyo_events,
+        "フレンドリンク": parse_friendlink_events,
+        "レパン": parse_lepane_events,
+        "KOBUSHI BEER": parse_kobushi_events,
+        "OnlyStory": parse_onlystory_events,
+        "First Village": parse_first_village_events,
+        "経済界倶楽部": parse_keizaikai_events,
+        "イベマド": parse_eventmado_events,
+    }
+    parser = parsers.get(source_name)
+    if not parser:
+        return []
+    items = parser(text, page_url, source_name)
+    if keyword:
+        items = [item for item in items if external_keyword_matches(keyword, event_searchable_text(item))]
+    return dedupe_external_events(items)
+
+
+def event_searchable_text(item):
+    return " ".join(
+        as_text(item.get(key))
+        for key in ("title", "place", "address", "owner")
+    )
+
+
+def dedupe_external_events(items):
+    unique = []
+    seen = set()
+    for item in sorted(items, key=lambda value: value.get("startedAt") or ""):
+        key = (item.get("url"), item.get("startedAt"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def event_from_block(block, page_url, source_name, title_pattern, href_pattern=None, place_pattern=None, title_prefix=""):
+    title_match = re.search(title_pattern, block, re.I | re.S)
+    dates = parse_external_datetimes(clean_html(block))
+    if not title_match or not dates:
+        return []
+    title = clean_html(title_match.group(1))
+    if title_prefix and title_prefix.lower() not in title.lower():
+        title = f"{title_prefix}{title}"
+    href_match = re.search(href_pattern, block, re.I | re.S) if href_pattern else None
+    href = html.unescape(href_match.group(1)) if href_match else page_url
+    place_match = re.search(place_pattern, block, re.I | re.S) if place_pattern else None
+    place = clean_html(place_match.group(1)) if place_match else extract_external_location(clean_html(block))
+    summary = clean_html(block)
+    return [
+        make_external_event(
+            title=title[:220],
+            started_at=started_at,
+            place=place[:120],
+            address=summary[:320],
+            url=urllib.parse.urljoin(page_url, href),
+            source_name=source_name,
+        )
+        for started_at in dates[:1]
+    ]
+
+
+def parse_doomo_events(text, page_url, source_name):
+    items = []
+    blocks = re.findall(
+        r'(<a\b[^>]*href="https://doomo\.jp/event/[^"]+"[^>]*>.*?</a>)',
+        text or "",
+        re.I | re.S,
+    )
+    for block in blocks:
+        title_match = re.search(r'<div\b[^>]*class="eventlisttitle"[^>]*>(.*?)</div>', block, re.I | re.S)
+        href_match = re.search(r'<a\b[^>]*href="([^"]+)"', block, re.I)
+        if not title_match or not href_match:
+            continue
+        title = clean_html(title_match.group(1))
+        for schedule in re.findall(r'<div\b[^>]*class="nittei[^>]*>.*?</div>\s*</div>', block, re.I | re.S):
+            schedule_text = clean_html(schedule)
+            dates = parse_external_datetimes(schedule_text)
+            if not dates:
+                continue
+            items.append(make_external_event(
+                title=title[:220],
+                started_at=dates[0],
+                place=extract_external_location(schedule_text),
+                address=schedule_text[:320],
+                url=urllib.parse.urljoin(page_url, html.unescape(href_match.group(1))),
+                source_name=source_name,
+            ))
+    return items
+
+
+def parse_friendlink_events(text, page_url, source_name):
+    items = []
+    for block in re.findall(r"<li>\s*<span class=\"date\">20\d{2}年.*?</li>", text or "", re.I | re.S):
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<a\b[^>]*href=["\'][^"\']+["\'][^>]*>(.*?)</a>',
+            r'<a\b[^>]*href=["\']([^"\']+)["\']',
+        ))
+    return items
+
+
+def parse_lepane_events(text, page_url, source_name):
+    items = []
+    blocks = re.findall(r'<li class="wp-block-post[^>]*meeting[^>]*>.*?</li>', text or "", re.I | re.S)
+    for block in blocks:
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<h2\b[^>]*>\s*<a\b[^>]*>(.*?)</a>\s*</h2>',
+            r'<h2\b[^>]*>\s*<a\b[^>]*href=["\']([^"\']+)["\']',
+            title_prefix="レパン異業種交流会（",
+        ))
+        if items:
+            items[-1]["title"] = items[-1]["title"].rstrip("）") + "）"
+    return items
+
+
+def parse_eventmado_events(text, page_url, source_name):
+    items = []
+    for block in re.findall(r'<article class="evemado-mjp-card".*?</article>', text or "", re.I | re.S):
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<h3\b[^>]*>(.*?)</h3>',
+            r'<a\b[^>]*class="evemado-mjp-detail-button"[^>]*href="([^"]+)"',
+            r'<p\b[^>]*class="evemado-mjp-card-place"[^>]*>(.*?)</p>',
+        ))
+    return items
+
+
+def parse_first_village_events(text, page_url, source_name):
+    items = []
+    blocks = re.findall(r'<div class="txtbox">.*?</div>\s*</div>', text or "", re.I | re.S)
+    for block in blocks:
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<dt\b[^>]*class="dsc__ttl"[^>]*>(.*?)</dt>',
+            r'<a\b[^>]*class="tmp__btn"[^>]*href="([^"]+)"',
+            r'<span\b[^>]*class="tag"[^>]*>会場</span>\s*(.*?)(?:</div>|<)',
+        ))
+    return items
+
+
+def parse_keizaikai_events(text, page_url, source_name):
+    items = []
+    blocks = re.findall(r'<div class="event-list[^>]*>.*?(?=<div class="event-list|</main>|$)', text or "", re.I | re.S)
+    for block in blocks:
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<dl\b[^>]*class="event-header"[^>]*>.*?<dd>(.*?)</dd>',
+            r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*class="btn-border2"',
+            r'<th>会場</th>\s*<td>(.*?)</td>',
+        ))
+    return items
+
+
+def parse_kobushi_events(text, page_url, source_name):
+    items = []
+    for block in re.findall(r'<div class="group_event_inner">.*?(?=<div class="group_event_inner">|$)', text or "", re.I | re.S):
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<p\b[^>]*class="event_title"[^>]*>\s*<a\b[^>]*>(.*?)</a>',
+            r'<p\b[^>]*class="event_title"[^>]*>\s*<a\b[^>]*href="([^"]+)"',
+            r'<p\b[^>]*class="event_place location"[^>]*>.*?<span\b[^>]*class="icon_place"[^>]*>(.*?)</span>',
+        ))
+    return items
+
+
+def parse_onlystory_events(text, page_url, source_name):
+    items = []
+    for block in re.findall(r'<a\b[^>]*class="p-card-column _post1"[^>]*>.*?</a>', text or "", re.I | re.S):
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<h2\b[^>]*class="__title"[^>]*>(.*?)</h2>',
+            r'<a\b[^>]*href="([^"]+)"',
+        ))
+    return items
+
+
+def parse_clip_tokyo_events(text, page_url, source_name):
+    items = []
+    for block in re.findall(r'<div class="Event_List_Box\b[^>]*>.*?</a>\s*</div>', text or "", re.I | re.S):
+        items.extend(event_from_block(
+            block, page_url, source_name,
+            r'<h3\b[^>]*class="Event_List_Box_Name_h3"[^>]*>(.*?)</h3>',
+            r'<a\b[^>]*href="([^"]+)"',
+            r'<div\b[^>]*class="Event_List_Box_Place"[^>]*>(.*?)</div>',
+        ))
+    return items
+
+
+def parse_external_jsonld_events(text, page_url, source_name):
+    items = []
+    for raw in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', text or "", re.I | re.S):
+        try:
+            payload = json.loads(html.unescape(raw).strip())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for event in iter_jsonld_events(payload):
+            location = event.get("location") if isinstance(event.get("location"), dict) else {}
+            address_value = location.get("address")
+            if isinstance(address_value, dict):
+                address_value = " ".join(as_text(value) for value in address_value.values() if value)
+            offers = event.get("offers") if isinstance(event.get("offers"), dict) else {}
+            url = urllib.parse.urljoin(page_url, as_text(event.get("url") or offers.get("url") or page_url))
+            started_at = as_text(event.get("startDate"))
+            if not started_at:
+                continue
+            items.append(
+                make_external_event(
+                    title=as_text(event.get("name")),
+                    started_at=started_at,
+                    ended_at=as_text(event.get("endDate")),
+                    place=as_text(location.get("name")),
+                    address=as_text(address_value),
+                    url=url,
+                    source_name=source_name,
+                    owner=as_text(event.get("organizer")),
+                )
+            )
+    return items
+
+
+def iter_jsonld_events(value):
+    if isinstance(value, list):
+        for item in value:
+            yield from iter_jsonld_events(item)
+        return
+    if not isinstance(value, dict):
+        return
+    event_type = value.get("@type")
+    if event_type == "Event" or (isinstance(event_type, list) and "Event" in event_type):
+        yield value
+    for key in ("@graph", "itemListElement", "item"):
+        if key in value:
+            yield from iter_jsonld_events(value[key])
+
+
+def looks_like_external_event(title, context):
+    text = f"{title} {context}".lower()
+    event_terms = EVENT_MEETUP_KEYWORDS + EVENT_BUSINESS_KEYWORDS + (
+        "イベント", "セミナー", "例会", "講演", "勉強会", "サロン", "倶楽部", "部会", "meetup",
+    )
+    return any(term.lower() in text for term in event_terms) and bool(parse_external_datetimes(title) or parse_external_datetimes(context))
+
+
+def derive_external_title(context_raw, source_name):
+    candidates = []
+    for pattern in (r'<h[2-5]\b[^>]*>(.*?)</h[2-5]>', r'<img\b[^>]*?alt=["\']([^"\']+)["\']'):
+        candidates.extend(clean_html(value) for value in re.findall(pattern, context_raw or "", re.I | re.S))
+    ignored = {"イベント", "イベント一覧", "詳細を見る", "more", source_name.lower()}
+    candidates = [value for value in candidates if len(value) >= 6 and value.lower() not in ignored]
+    event_terms = EVENT_MEETUP_KEYWORDS + EVENT_BUSINESS_KEYWORDS + ("イベント", "セミナー", "例会", "講演", "倶楽部")
+    candidates = [value for value in candidates if any(term.lower() in value.lower() for term in event_terms)]
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda value: (bool(parse_external_datetimes(value)), len(value)))
+
+
+def external_keyword_matches(keyword, text):
+    normalized = text.lower()
+    tokens = [token.lower() for token in re.split(r"[\s,、]+", keyword or "") if token]
+    for token in tokens:
+        if token == "交流会":
+            continue
+        if token not in normalized:
+            return False
+    return True
+
+
+def parse_external_datetimes(text):
+    patterns = (
+        r"(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日",
+        r"(20\d{2})\s*年?\s*(\d{1,2})\s*/\s*(\d{1,2})",
+        r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})",
+        r"(?<!\d)(\d{1,2})月\s*(\d{1,2})日",
+        r"(?<!\d)(\d{1,2})\s*/\s*(\d{1,2})(?!\d)",
+    )
+    values = []
+    seen = set()
+    for pattern_index, pattern in enumerate(patterns):
+        for match in re.finditer(pattern, text or ""):
+            groups = [int(value) for value in match.groups()]
+            if pattern_index < 3:
+                year, month, day = groups
+            else:
+                year = today_local_date().year
+                month, day = groups
+            tail = (text or "")[match.end() : match.end() + 30]
+            time_match = re.search(r"(\d{1,2}):(?P<minute>\d{2})", tail)
+            hour = int(time_match.group(1)) if time_match else 0
+            minute = int(time_match.group("minute")) if time_match else 0
+            try:
+                value = datetime(year, month, day, hour, minute, tzinfo=datetime.now().astimezone().tzinfo).isoformat()
+            except ValueError:
+                continue
+            if value not in seen:
+                seen.add(value)
+                values.append(value)
+    return values
+
+
+def extract_external_location(text):
+    match = re.search(
+        r"(オンライン|東京都|大阪府|北海道|神奈川県|埼玉県|千葉県|愛知県|福岡県|兵庫県|京都府|"
+        r"新宿|渋谷|有楽町|銀座|梅田|本町|心斎橋|名古屋|札幌|仙台|横浜|神戸|広島|福岡|東京|大阪)",
+        text or "",
+    )
+    return match.group(1) if match else ""
+
+
+def make_external_event(title, started_at, place, address, url, source_name, ended_at="", owner=""):
+    return {
+        "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "title": title,
+        "startedAt": started_at,
+        "endedAt": ended_at,
+        "place": place,
+        "address": address,
+        "url": url,
+        "limit": "",
+        "accepted": "",
+        "waiting": "",
+        "owner": owner,
+        "hashTag": "",
+        "eventId": f"{source_name}:{url}:{started_at}",
+        "source": source_name,
+    }
 
 
 def filter_events_by_area(events, area):

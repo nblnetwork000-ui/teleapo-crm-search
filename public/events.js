@@ -179,7 +179,7 @@ function formatDate(value) {
 
 function setBusy(isBusy) {
   eventButton.disabled = isBusy;
-  eventButton.textContent = isBusy ? '処理中...' : 'イベント検索して追記';
+  eventButton.textContent = isBusy ? '処理中...' : 'イベント検索';
 }
 
 function setStatus(message, isError = false) {
