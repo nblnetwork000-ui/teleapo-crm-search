@@ -56,7 +56,12 @@ eventForm.addEventListener('submit', async (event) => {
     renderEventRows(data.items);
     summary.textContent = `${payload.start}件目から${data.count}件取得 / ${data.appended}件追記 / ${data.skipped}件スキップ`;
     eventStartInput.value = String(payload.start + payload.results);
-    setStatus(`完了しました。次は${eventStartInput.value}件目から検索できます。`);
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+    if (warnings.length) {
+      setStatus(`検索は完了しました。${warnings.join(' / ')}`);
+    } else {
+      setStatus(`完了しました。次は${eventStartInput.value}件目から検索できます。`);
+    }
   } catch (error) {
     setStatus(error.message, true);
   } finally {

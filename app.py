@@ -360,6 +360,7 @@ def search_connpass_events(search):
     keyword = search["keyword"]
     if search["area"]:
         keyword = f"{keyword} {search['area']}"
+    warnings = []
     if search["source"] == "connpass":
         events = scrape_connpass_search(keyword, search["start"], search["results"], search["futureOnly"])
     elif search["source"] == "kokuchpro":
@@ -367,16 +368,45 @@ def search_connpass_events(search):
     elif search["source"] == "doorkeeper":
         events = scrape_doorkeeper_search(search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"])
     else:
-        events = merge_event_sources(
-            scrape_connpass_search(keyword, search["start"], search["results"], search["futureOnly"]),
-            scrape_kokuchpro_search(search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"]),
-            scrape_doorkeeper_search(search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"]),
-        )[: search["results"]]
+        source_searches = (
+            ("connpass", lambda: scrape_connpass_search(keyword, search["start"], search["results"], search["futureOnly"])),
+            (
+                "こくちーず",
+                lambda: scrape_kokuchpro_search(
+                    search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"]
+                ),
+            ),
+            (
+                "Doorkeeper",
+                lambda: scrape_doorkeeper_search(
+                    search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"]
+                ),
+            ),
+        )
+        successful_sources = []
+        for source_name, source_search in source_searches:
+            try:
+                successful_sources.append(source_search())
+            except Exception as error:
+                warnings.append(f"{source_name}は一時取得できませんでした（{brief_external_error(error)}）")
+        if not successful_sources:
+            raise RuntimeError("すべてのイベント検索元から取得できませんでした。しばらく待って再試行してください。")
+        events = merge_event_sources(*successful_sources)[: search["results"]]
     return {
         "total": len(events),
         "count": len(events),
         "items": events,
+        "warnings": warnings,
     }
+
+
+def brief_external_error(error):
+    message = re.sub(r"<[^>]+>", " ", str(error))
+    message = re.sub(r"\s+", " ", message).strip()
+    http_status = re.search(r"HTTP\s+(\d{3})", message)
+    if http_status:
+        return f"HTTP {http_status.group(1)}"
+    return message[:120] or "取得エラー"
 
 
 def search_job_listings(search):
@@ -1587,6 +1617,7 @@ def make_handler(config, sheets, csrf_token):
                         "appended": sheet_result["appended"],
                         "skipped": sheet_result["skipped"],
                         "items": result["items"],
+                        "warnings": result.get("warnings", []),
                     },
                 )
             except InputError as error:
