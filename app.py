@@ -276,12 +276,18 @@ def parse_event_search_input(data, max_results):
     allowed_sources = {"connpass", "kokuchpro", "doorkeeper", "web", "all", *EXTERNAL_EVENT_SOURCES}
     if source not in allowed_sources:
         raise InputError("検索元の指定が不正です。")
+    date_from = clean_optional_date(data.get("dateFrom"), "開催日の開始")
+    date_to = clean_optional_date(data.get("dateTo"), "開催日の終了")
+    if date_from and date_to and date_from > date_to:
+        raise InputError("開催日の終了は開始日以降を指定してください。")
     return {
         "keyword": clean_text(data.get("keyword"), "キーワード"),
         "area": clean_optional_text(data.get("area", ""), "エリア"),
         "results": min(clean_int(data.get("results", 20), 1, 100, "件数"), max_results),
         "start": clean_int(data.get("start", 1), 1, 1000, "開始位置"),
-        "futureOnly": data.get("futureOnly") is not False,
+        "futureOnly": data.get("futureOnly") is not False and not (date_from or date_to),
+        "dateFrom": date_from,
+        "dateTo": date_to,
         "source": source,
         "append": data.get("append") is not False,
     }
@@ -309,6 +315,18 @@ def clean_optional_text(value, label):
     value = value.strip()
     if len(value) > 80:
         raise InputError(f"{label}は80文字以内で入力してください。")
+    return value
+
+
+def clean_optional_date(value, label):
+    if value in (None, ""):
+        return ""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise InputError(f"{label}の指定が不正です。")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise InputError(f"{label}の指定が不正です。")
     return value
 
 
@@ -435,8 +453,10 @@ def search_connpass_events(search, brave_search_api_key=""):
                     warnings.append(f"{source_name}は一時取得できませんでした（{brief_external_error(error)}）")
         if not successful_sources:
             raise RuntimeError("すべてのイベント検索元から取得できませんでした。しばらく待って再試行してください。")
-        events = merge_event_sources(*successful_sources)[: search["results"]]
+        events = merge_event_sources(*successful_sources)
     events = filter_events_by_area(events, search["area"])
+    events = filter_events_by_date_range(events, search["dateFrom"], search["dateTo"])
+    events = events[: search["results"]]
     return {
         "total": len(events),
         "count": len(events),
@@ -857,6 +877,7 @@ def make_external_event(title, started_at, place, address, url, source_name, end
         "place": place,
         "address": address,
         "url": url,
+        "fee": extract_external_fee(f"{title} {address}"),
         "limit": "",
         "accepted": "",
         "waiting": "",
@@ -865,6 +886,27 @@ def make_external_event(title, started_at, place, address, url, source_name, end
         "eventId": f"{source_name}:{url}:{started_at}",
         "source": source_name,
     }
+
+
+def extract_external_fee(text):
+    normalized = clean_html(text or "")
+    if re.search(r"(?:参加費|料金|会費|入場料|チケット)\s*[：:]?\s*無料|(?:参加|入場)無料|無料開催", normalized):
+        return "無料"
+    values = []
+    patterns = (
+        r"(?:参加費|料金|会費|入場料|チケット|男性|女性)\s*[：:]?\s*([￥¥]?\s*\d[\d,]*\s*円?)",
+        r"([￥¥]\s*\d[\d,]*)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, normalized, re.I):
+            value = re.sub(r"\s+", "", match.group(1))
+            if value and value not in values:
+                values.append(value)
+            if len(values) == 3:
+                break
+        if values:
+            break
+    return " / ".join(values)
 
 
 def filter_events_by_area(events, area):
@@ -893,6 +935,27 @@ def filter_events_by_area(events, area):
         ).lower()
         if all(token_matches(token, searchable) for token in required_tokens):
             filtered.append(item)
+    return filtered
+
+
+def filter_events_by_date_range(events, date_from="", date_to=""):
+    if not date_from and not date_to:
+        return events
+    start_date = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else None
+    end_date = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else None
+    filtered = []
+    for item in events:
+        try:
+            event_date = datetime.fromisoformat(
+                as_text(item.get("startedAt")).replace("Z", "+00:00")
+            ).astimezone(JST).date()
+        except ValueError:
+            continue
+        if start_date and event_date < start_date:
+            continue
+        if end_date and event_date > end_date:
+            continue
+        filtered.append(item)
     return filtered
 
 

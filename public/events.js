@@ -72,6 +72,8 @@ eventForm.addEventListener('submit', async (event) => {
     keyword: formData.get('keyword'),
     area: [formData.get('prefecture'), formData.get('areaDetail')].filter(Boolean).join(' '),
     source: formData.get('source'),
+    dateFrom: formData.get('dateFrom'),
+    dateTo: formData.get('dateTo'),
     results: Number(formData.get('results')),
     start: Number(formData.get('start')),
     futureOnly: formData.get('futureOnly') === 'on',
@@ -130,12 +132,11 @@ function renderEventRows(items) {
   for (const item of items) {
     const tr = document.createElement('tr');
     tr.append(
-      cellWithLink(item.title, item.url, 'イベント名'),
-      textCell(formatDate(item.startedAt), '開催開始'),
-      textCell(item.place, '会場'),
-      textCell(item.address, '住所'),
-      textCell(`${item.accepted || 0}/${item.limit || '-'}`, '参加'),
-      textCell(item.source, '検索元')
+      textCell(item.title, 'イベント名'),
+      textCell(formatLocation(item), '開催場所'),
+      textCell(formatEventTime(item), '時間'),
+      textCell(item.fee || '要確認', '参加費'),
+      detailCell(item)
     );
     fragment.append(tr);
   }
@@ -149,19 +150,37 @@ function textCell(value, label) {
   return td;
 }
 
-function cellWithLink(label, url, heading) {
-  const td = textCell('', heading);
-  if (!url) {
-    td.textContent = label || '-';
+function detailCell(item) {
+  const td = textCell('', '詳細');
+  td.classList.add('detailCell');
+  if (!item.url) {
+    td.textContent = item.source || '-';
     return td;
   }
   const link = document.createElement('a');
-  link.href = url;
+  link.href = item.url;
   link.target = '_blank';
   link.rel = 'noopener';
-  link.textContent = label || url;
+  link.textContent = '詳細を見る';
+  link.title = `${item.source || '掲載元'}のページを開く`;
   td.append(link);
   return td;
+}
+
+function formatLocation(item) {
+  const place = String(item.place || '').trim();
+  const address = String(item.address || '').trim();
+  if (!place) return address || '要確認';
+  if (!address || address === place || address.includes(place)) return place;
+  if (address.length > 120) return place;
+  return `${place}（${address}）`;
+}
+
+function formatEventTime(item) {
+  const start = formatDate(item.startedAt);
+  const end = formatDate(item.endedAt);
+  if (!end || end === start) return start || '要確認';
+  return `${start} 〜 ${end}`;
 }
 
 function formatDate(value) {

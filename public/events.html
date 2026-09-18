@@ -93,6 +93,16 @@
               <option id="eventWebSource" value="web" hidden disabled>Web検索</option>
             </select>
           </label>
+          <div class="grid">
+            <label>
+              開催日（開始）
+              <input id="eventDateFrom" name="dateFrom" type="date" />
+            </label>
+            <label>
+              開催日（終了）
+              <input id="eventDateTo" name="dateTo" type="date" />
+            </label>
+          </div>
           <div class="grid grid-three">
             <label>
               件数
@@ -130,11 +140,10 @@
             <thead>
               <tr>
                 <th>イベント名</th>
-                <th>開催開始</th>
-                <th>会場</th>
-                <th>住所</th>
-                <th>参加</th>
-                <th>検索元</th>
+                <th>開催場所</th>
+                <th>時間</th>
+                <th>参加費</th>
+                <th>詳細</th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>
