@@ -3,7 +3,6 @@ const APPEARANCE_KEY = 'teleapo-ui-mode';
 const eventForm = document.querySelector('#eventForm');
 const eventButton = document.querySelector('#eventSubmitButton');
 const eventResultsInput = document.querySelector('#eventResults');
-const eventStartInput = document.querySelector('#eventStart');
 const eventPrefecture = document.querySelector('#eventPrefecture');
 const eventAreaDetail = document.querySelector('#eventAreaDetail');
 const eventWebSource = document.querySelector('#eventWebSource');
@@ -75,7 +74,7 @@ eventForm.addEventListener('submit', async (event) => {
     dateFrom: formData.get('dateFrom'),
     dateTo: formData.get('dateTo'),
     results: Number(formData.get('results')),
-    start: Number(formData.get('start')),
+    start: 1,
     futureOnly: formData.get('futureOnly') === 'on',
     append: formData.get('append') === 'on'
   };
@@ -96,13 +95,12 @@ eventForm.addEventListener('submit', async (event) => {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '処理に失敗しました。');
     renderEventRows(data.items);
-    summary.textContent = `${payload.start}件目から${data.count}件取得 / ${data.appended}件追記 / ${data.skipped}件スキップ`;
-    eventStartInput.value = String(payload.start + payload.results);
+    summary.textContent = `${data.count}件取得 / ${data.appended}件追記 / ${data.skipped}件スキップ`;
     const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
     if (warnings.length) {
       setStatus(`検索は完了しました。${warnings.join(' / ')}`);
     } else {
-      setStatus(`完了しました。次は${eventStartInput.value}件目から検索できます。`);
+      setStatus('検索が完了しました。');
     }
   } catch (error) {
     setStatus(error.message, true);
