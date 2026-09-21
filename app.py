@@ -42,6 +42,8 @@ SHOP_STATUS_COLORS = {
 }
 SHOP_COLUMN_WIDTHS = [220, 150, 360, 130, 420]
 EVENT_SHEET_NAME = "イベントリスト"
+SAVED_EVENT_SHEET_NAME = "保存イベント"
+SAVED_EVENT_HEADERS = ["利用者", "保存ID", "イベント名", "開催開始", "開催終了", "会場", "住所", "参加費", "URL", "掲載元", "保存日時", "状態"]
 JOB_SHEET_NAME = "求人掲載店舗リスト"
 USER_SHEET_NAME = "SIGNALユーザー"
 CUSTOMER_SHEET_NAME = "SIGNAL顧客リスト"
@@ -56,6 +58,10 @@ USER_HEADERS = [
     "作成日時",
     "更新日時",
     "最終ログイン日時",
+    "業種",
+    "組織の人数",
+    "利用目的",
+    "所在地",
 ]
 EVENT_HEADERS = [
     "取得日時",
@@ -289,6 +295,15 @@ def clean_text(value, label):
     return value
 
 
+def clean_profile_text(value, label, max_length):
+    if not isinstance(value, str):
+        raise InputError(f"{label}を入力してください。")
+    value = value.strip()
+    if not value or len(value) > max_length:
+        raise InputError(f"{label}は1文字以上{max_length}文字以内で入力してください。")
+    return value
+
+
 def clean_int(value, minimum, maximum, label):
     try:
         number = int(value)
@@ -340,7 +355,7 @@ def parse_event_search_input(data, max_results):
         "feeBand": fee_band,
         "feeSort": fee_sort,
         "source": source,
-        "append": data.get("append") is not False,
+        "append": data.get("append") is True,
     }
 
 
@@ -1740,7 +1755,7 @@ class UserStore:
             if self.initialized:
                 return
             ensure_sheet_exists(self.sheets, self.config, USER_SHEET_NAME)
-            header_range = f"{quote_sheet_name(USER_SHEET_NAME)}!A1:I1"
+            header_range = f"{quote_sheet_name(USER_SHEET_NAME)}!A1:M1"
             values = self.sheets.get_values(self.config["GOOGLE_SHEET_ID"], header_range).get("values", [])
             if not values or values[0] != USER_HEADERS:
                 self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], header_range, [USER_HEADERS])
@@ -1768,7 +1783,7 @@ class UserStore:
                 if rows:
                     self.sheets.append_values(
                         self.config["GOOGLE_SHEET_ID"],
-                        f"{quote_sheet_name(USER_SHEET_NAME)}!A:I",
+                        f"{quote_sheet_name(USER_SHEET_NAME)}!A:M",
                         rows,
                     )
             elif not existing_users and self.config.get("ACCESS_PASSWORD"):
@@ -1776,7 +1791,7 @@ class UserStore:
                 legacy_email = (self.config.get("ACCESS_MEMBER_ID") or "member").strip().lower()
                 self.sheets.append_values(
                     self.config["GOOGLE_SHEET_ID"],
-                    f"{quote_sheet_name(USER_SHEET_NAME)}!A:I",
+                    f"{quote_sheet_name(USER_SHEET_NAME)}!A:M",
                     [[legacy_email, self.config["ACCESS_PASSWORD"], "admin", "active", "", "", now, now, ""]],
                 )
             self.initialized = True
@@ -1786,11 +1801,11 @@ class UserStore:
             if not skip_ensure:
                 self.ensure_initialized()
             rows = self.sheets.get_values(
-                self.config["GOOGLE_SHEET_ID"], f"{quote_sheet_name(USER_SHEET_NAME)}!A2:I"
+                self.config["GOOGLE_SHEET_ID"], f"{quote_sheet_name(USER_SHEET_NAME)}!A2:M"
             ).get("values", [])
             users = []
             for row_number, row in enumerate(rows, start=2):
-                padded = row + [""] * (9 - len(row))
+                padded = row + [""] * (13 - len(row))
                 email_address = padded[0].strip().lower()
                 if not email_address:
                     continue
@@ -1806,6 +1821,10 @@ class UserStore:
                         "createdAt": padded[6],
                         "updatedAt": padded[7],
                         "lastLoginAt": padded[8],
+                        "industry": padded[9],
+                        "organizationSize": padded[10],
+                        "purpose": padded[11],
+                        "location": padded[12],
                     }
                 )
             return users
@@ -1900,6 +1919,27 @@ class UserStore:
             user["updatedAt"] = utc_timestamp()
             self.write_user(user)
 
+    def save_profile(self, email_address, data):
+        if not isinstance(data, dict):
+            raise InputError("アンケートの入力内容が不正です。")
+        industry = clean_profile_text(data.get("industry"), "業種", 80)
+        organization_size = clean_int(data.get("organizationSize"), 1, 1000000, "組織の人数")
+        purpose = clean_profile_text(data.get("purpose"), "今回の利用目的", 200)
+        location = clean_profile_text(data.get("location"), "所在地", 80)
+        with self.lock:
+            user = self.find(email_address)
+            if not user or user["status"] != "active":
+                raise InputError("利用者が見つかりません。")
+            user.update({
+                "industry": industry,
+                "organizationSize": str(organization_size),
+                "purpose": purpose,
+                "location": location,
+                "updatedAt": utc_timestamp(),
+            })
+            self.write_user(user)
+            return user
+
     def write_user(self, user):
         row = [
             user.get("email", ""),
@@ -1911,13 +1951,17 @@ class UserStore:
             user.get("createdAt", ""),
             user.get("updatedAt", ""),
             user.get("lastLoginAt", ""),
+            user.get("industry", ""),
+            user.get("organizationSize", ""),
+            user.get("purpose", ""),
+            user.get("location", ""),
         ]
         if user.get("row"):
-            range_name = f"{quote_sheet_name(USER_SHEET_NAME)}!A{user['row']}:I{user['row']}"
+            range_name = f"{quote_sheet_name(USER_SHEET_NAME)}!A{user['row']}:M{user['row']}"
             self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], range_name, [row])
         else:
             response = self.sheets.append_values(
-                self.config["GOOGLE_SHEET_ID"], f"{quote_sheet_name(USER_SHEET_NAME)}!A:I", [row]
+                self.config["GOOGLE_SHEET_ID"], f"{quote_sheet_name(USER_SHEET_NAME)}!A:M", [row]
             )
             updated_range = response.get("updates", {}).get("updatedRange", "")
             match = re.search(r"![A-Z]+(\d+):", updated_range)
@@ -2112,6 +2156,69 @@ class CustomerStore:
                     existing[key] = len(rows) + appended + 1
                 saved.append(self._decode(row))
             return saved
+
+
+class SavedEventStore:
+    """Persist a private event list for each authenticated user."""
+
+    def __init__(self, sheets, config):
+        self.sheets = sheets
+        self.config = config
+        self.lock = threading.RLock()
+
+    def _rows(self):
+        ensure_sheet_exists(self.sheets, self.config, SAVED_EVENT_SHEET_NAME)
+        sheet = quote_sheet_name(SAVED_EVENT_SHEET_NAME)
+        header = self.sheets.get_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A1:L1").get("values", [])
+        if not header:
+            self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A1:L1", [SAVED_EVENT_HEADERS])
+        elif header[0] != SAVED_EVENT_HEADERS:
+            raise RuntimeError("保存イベントの列構成が一致しません。管理者に確認してください。")
+        return self.sheets.get_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A2:L").get("values", [])
+
+    @staticmethod
+    def _decode(row):
+        cells = (row + [""] * 12)[:12]
+        return dict(zip(("owner", "id", "title", "startedAt", "endedAt", "place", "address", "fee", "url", "source", "savedAt", "status"), cells))
+
+    def list_for(self, email_address):
+        with self.lock:
+            return [self._decode(row) for row in self._rows() if row and row[0].lower() == email_address.lower() and (len(row) < 12 or row[11] != "deleted")]
+
+    def save(self, email_address, item):
+        if not isinstance(item, dict):
+            raise InputError("イベント情報が不正です。")
+        values = {key: clean_customer_field(item.get(key), label, limit) for key, label, limit in (
+            ("title", "イベント名", 200), ("startedAt", "開催開始", 80), ("endedAt", "開催終了", 80),
+            ("place", "会場", 200), ("address", "住所", 300), ("fee", "参加費", 100),
+            ("url", "URL", 1000), ("source", "掲載元", 100),
+        )}
+        if not values["title"] or not values["url"] or not re.match(r"^https?://[^\s]+$", values["url"], re.I):
+            raise InputError("保存にはイベント名と有効なURLが必要です。")
+        identifier = hashlib.sha256((values["url"] + "|" + values["startedAt"]).encode("utf-8")).hexdigest()[:32]
+        with self.lock:
+            rows = self._rows()
+            row = [email_address.lower(), identifier, *(values[key] for key in ("title", "startedAt", "endedAt", "place", "address", "fee", "url", "source")), utc_timestamp(), "active"]
+            existing = next((number for number, old in enumerate(rows, start=2) if len(old) > 1 and old[0].lower() == email_address.lower() and old[1] == identifier), None)
+            sheet = quote_sheet_name(SAVED_EVENT_SHEET_NAME)
+            if existing:
+                self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A{existing}:L{existing}", [row])
+            else:
+                self.sheets.append_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A:L", [row])
+            return self._decode(row)
+
+    def delete(self, email_address, identifier):
+        if not isinstance(identifier, str) or not re.fullmatch(r"[a-f0-9]{32}", identifier):
+            raise InputError("保存IDが不正です。")
+        with self.lock:
+            rows = self._rows()
+            for number, old in enumerate(rows, start=2):
+                if len(old) > 1 and old[0].lower() == email_address.lower() and old[1] == identifier:
+                    row = (old + [""] * 12)[:12]
+                    row[11] = "deleted"
+                    self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], f"{quote_sheet_name(SAVED_EVENT_SHEET_NAME)}!A{number}:L{number}", [row])
+                    return
+            raise InputError("保存したイベントが見つかりません。")
 
 
 def clean_customer_field(value, label, limit):
@@ -2550,6 +2657,7 @@ def make_handler(config, sheets, csrf_token):
     hits = {}
     users = UserStore(sheets, config)
     customers = CustomerStore(sheets, config)
+    saved_events = SavedEventStore(sheets, config)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "LocalSearchSheets/1.0"
@@ -2591,6 +2699,15 @@ def make_handler(config, sheets, csrf_token):
                 except Exception as error:
                     self.send_json(500, {"error": str(error)})
                 return
+            if parsed.path == "/api/saved-events":
+                if config["APP_MODE"] != "events":
+                    self.send_json(404, {"error": "このサービスでは利用できない機能です。"})
+                    return
+                try:
+                    self.send_json(200, {"items": saved_events.list_for(member)})
+                except Exception as error:
+                    self.send_json(500, {"error": str(error)})
+                return
             if config["APP_MODE"] == "events":
                 if parsed.path == "/":
                     self.redirect("/events.html")
@@ -2606,6 +2723,7 @@ def make_handler(config, sheets, csrf_token):
                     self.redirect("/customers.html")
                     return
             if parsed.path == "/api/config":
+                profile = users.find(member) if config["APP_MODE"] == "events" else None
                 self.send_json(
                     200,
                     {
@@ -2619,6 +2737,7 @@ def make_handler(config, sheets, csrf_token):
                         "webSearchAvailable": bool(config["BRAVE_SEARCH_API_KEY"]),
                         "memberEmail": member,
                         "isAdmin": self.is_admin(member),
+                        "profileComplete": bool(profile and all(profile.get(key) for key in ("industry", "organizationSize", "purpose", "location"))),
                     },
                 )
                 return
@@ -2652,6 +2771,25 @@ def make_handler(config, sheets, csrf_token):
                 return
             try:
                 data = self.read_json_body(1024 * 1024 if parsed.path == "/api/customers" else 20 * 1024)
+                if parsed.path == "/api/profile":
+                    if config["APP_MODE"] != "events":
+                        self.send_json(404, {"error": "このサービスでは利用できない機能です。"})
+                        return
+                    users.save_profile(member, data)
+                    self.send_json(200, {"saved": True})
+                    return
+                if parsed.path == "/api/saved-events":
+                    if config["APP_MODE"] != "events":
+                        self.send_json(404, {"error": "このサービスでは利用できない機能です。"})
+                        return
+                    if not isinstance(data, dict):
+                        raise InputError("イベント情報が不正です。")
+                    if data.get("action") == "delete":
+                        saved_events.delete(member, data.get("id"))
+                        self.send_json(200, {"deleted": True})
+                    else:
+                        self.send_json(200, {"item": saved_events.save(member, data.get("item"))})
+                    return
                 if parsed.path == "/api/customers":
                     if config["APP_MODE"] not in {"full", "customers"}:
                         self.send_json(404, {"error": "イベント検索専用版では利用できない機能です。"})
@@ -2723,24 +2861,19 @@ def make_handler(config, sheets, csrf_token):
 
         def handle_event_search(self, data):
             search = parse_event_search_input(data, min(config["MAX_RESULTS_PER_RUN"], 100))
+            if search["append"]:
+                self.send_json(400, {"error": "シートへの追記機能は終了しました。保存リストをご利用ください。"})
+                return
             result = search_connpass_events(search, config["BRAVE_SEARCH_API_KEY"])
             warnings = list(result.get("warnings", []))
-            sheet_result = {"appended": 0, "skipped": 0}
-            if search["append"]:
-                try:
-                    sheet_result = append_events_to_sheet(sheets, config, result["items"])
-                except Exception as error:
-                    warnings.append(
-                        f"検索結果は取得できましたが、Googleシートへ追記できませんでした（{brief_external_error(error)}）"
-                    )
             self.send_json(
                 200,
                 {
                     "query": {"keyword": search["keyword"], "area": search["area"]},
                     "total": result["total"],
                     "count": result["count"],
-                    "appended": sheet_result["appended"],
-                    "skipped": sheet_result["skipped"],
+                    "appended": 0,
+                    "skipped": 0,
                     "items": result["items"],
                     "warnings": warnings,
                 },
@@ -3367,6 +3500,10 @@ def admin_users_page(user_list, member, csrf_token, message="", is_error=False, 
             f"<td>{html.escape(user['email'])}</td>"
             f"<td>{'管理者' if user['role'] == 'admin' else '利用者'}</td>"
             f"<td><span class=\"status {html.escape(user['status'])}\">{status_labels.get(user['status'], user['status'])}</span></td>"
+            f"<td><span class=\"profileItem\">業種：{html.escape(user.get('industry') or '未回答')}</span>"
+            f"<span class=\"profileItem\">人数：{html.escape(user.get('organizationSize') or '未回答')}</span>"
+            f"<span class=\"profileItem\">利用目的：{html.escape(user.get('purpose') or '未回答')}</span>"
+            f"<span class=\"profileItem\">所在地：{html.escape(user.get('location') or '未回答')}</span></td>"
             f"<td>{html.escape(format_admin_date(user['updatedAt']))}</td>"
             f"<td>{action}</td>"
             "</tr>"
@@ -3389,13 +3526,14 @@ def admin_users_page(user_list, member, csrf_token, message="", is_error=False, 
   <title>利用者管理 | SIGNAL</title><link rel="icon" type="image/png" href="/assets/signal-icon.png" />
   <style>
     :root {{ color-scheme:dark; font-family:Inter,"Noto Sans JP",system-ui,sans-serif; background:#07101f; color:#eaf1f8; }} * {{ box-sizing:border-box; }} body {{ margin:0; min-height:100vh; background:linear-gradient(160deg,#07101f 0%,#0b1729 55%,#101c2d 100%); }}
-    main {{ width:min(1100px,calc(100% - 28px)); margin:30px auto 56px; }} header {{ display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:22px; }}
+    main {{ width:min(1200px,calc(100% - 28px)); margin:30px auto 56px; }} header {{ display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:22px; }}
     h1 {{ margin:4px 0; }} h2 {{ margin-top:0; }} .brand {{ color:#7dd3fc; font-weight:950; letter-spacing:.12em; }} a {{ color:#8fdcff; }}
     section {{ background:rgb(10 22 39 / 92%); border:1px solid #ffffff16; border-radius:14px; padding:22px; margin-bottom:20px; box-shadow:0 20px 55px #02061745; }}
     form {{ display:flex; gap:10px; align-items:end; flex-wrap:wrap; }} label {{ display:grid; gap:7px; min-width:min(360px,100%); font-size:13px; font-weight:800; }}
     input {{ padding:11px 12px; border:1px solid #ffffff25; border-radius:8px; background:#081120; color:#fff; font:inherit; }}
     button {{ padding:11px 15px; border:0; border-radius:8px; background:#38bdf8; color:#06101d; font-weight:900; cursor:pointer; }} button.secondary {{ background:#24344d; color:#e5eefb; padding:8px 10px; }}
     table {{ width:100%; border-collapse:collapse; }} th,td {{ text-align:left; padding:12px 10px; border-bottom:1px solid #ffffff14; }} th {{ color:#91a7c4; font-size:12px; }}
+    .profileItem {{ display:block; min-width:230px; margin-bottom:4px; overflow-wrap:anywhere; }}
     .status {{ display:inline-block; padding:5px 8px; border-radius:999px; font-size:12px; font-weight:850; background:#334155; }} .status.active {{ background:#14532d; }} .status.invited {{ background:#854d0e; }}
     .notice {{ padding:11px 13px; border-radius:8px; background:#0c4a6e; }} .notice.error {{ background:#611c1c; }} .inviteLink {{ display:grid; gap:8px; margin-top:16px; padding:16px; border:1px solid #38bdf845; border-radius:10px; background:#071525; }} .copyRow {{ display:grid; grid-template-columns:1fr auto; gap:8px; }} small {{ color:#9fb0c7; }}
     .flow {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0 20px; }} .step {{ padding:14px; border:1px solid #ffffff14; border-radius:10px; background:#0a182a; }} .step b {{ display:block; color:#7dd3fc; margin-bottom:5px; }} .delivery {{ display:inline-flex; margin:0 0 16px; padding:7px 10px; border-radius:999px; background:#17283e; color:#b9c9dc; font-size:12px; font-weight:800; }}
@@ -3413,7 +3551,7 @@ def admin_users_page(user_list, member, csrf_token, message="", is_error=False, 
       <button type="submit">招待を発行</button>
     </form>{link_panel}
   </section>
-  <section><h2>登録済み利用者</h2><div class="tableWrap"><table><thead><tr><th>メールアドレス</th><th>権限</th><th>状態</th><th>更新</th><th>操作</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
+  <section><h2>登録済み利用者</h2><div class="tableWrap"><table><thead><tr><th>メールアドレス</th><th>権限</th><th>状態</th><th>利用開始アンケート</th><th>更新</th><th>操作</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
   <script>async function copyInviteUrl(button) {{ const input=document.getElementById('inviteUrl'); if(!input)return; await navigator.clipboard.writeText(input.value); button.textContent='コピー済み'; setTimeout(()=>button.textContent='コピー',1600); }}</script>
 </main></body></html>"""
 
