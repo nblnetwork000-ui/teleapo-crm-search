@@ -238,8 +238,8 @@ def parse_email_list(raw_value):
 def load_config():
     load_dotenv()
     app_mode = os.environ.get("APP_MODE", "full").strip().lower()
-    if app_mode not in {"full", "events"}:
-        raise RuntimeError("APP_MODE は full または events を設定してください。")
+    if app_mode not in {"full", "events", "customers"}:
+        raise RuntimeError("APP_MODE は full / events / customers のいずれかを設定してください。")
     access_users = parse_access_users(os.environ.get("ACCESS_USERS_JSON", ""))
     config = {
         "APP_MODE": app_mode,
@@ -2511,6 +2511,9 @@ def make_handler(config, sheets, csrf_token):
                 self.send_admin_users_page(member)
                 return
             if parsed.path == "/api/customers":
+                if config["APP_MODE"] not in {"full", "customers"}:
+                    self.send_json(404, {"error": "イベント検索専用版では利用できない機能です。"})
+                    return
                 if not member:
                     self.send_json(401, {"error": "ログインしてください。"})
                     return
@@ -2523,8 +2526,15 @@ def make_handler(config, sheets, csrf_token):
                 if parsed.path == "/":
                     self.redirect("/events.html")
                     return
-                if parsed.path == "/local-search.html" or parsed.path.startswith("/crm/"):
+                if parsed.path in {"/local-search.html", "/customers.html"} or parsed.path.startswith("/crm/"):
                     self.redirect("/events.html")
+                    return
+            if config["APP_MODE"] == "customers":
+                if parsed.path == "/":
+                    self.redirect("/customers.html")
+                    return
+                if parsed.path in {"/events.html", "/local-search.html"} or parsed.path.startswith("/crm/"):
+                    self.redirect("/customers.html")
                     return
             if parsed.path == "/api/config":
                 self.send_json(
@@ -2574,6 +2584,9 @@ def make_handler(config, sheets, csrf_token):
             try:
                 data = self.read_json_body(1024 * 1024 if parsed.path == "/api/customers" else 20 * 1024)
                 if parsed.path == "/api/customers":
+                    if config["APP_MODE"] not in {"full", "customers"}:
+                        self.send_json(404, {"error": "イベント検索専用版では利用できない機能です。"})
+                        return
                     if not member:
                         self.send_json(401, {"error": "ログインしてください。"})
                         return
@@ -2582,10 +2595,14 @@ def make_handler(config, sheets, csrf_token):
                     self.send_json(200, {"items": customers.save(member, data.get("items"))})
                     return
                 if self.path == "/api/events/search-and-append":
+                    if config["APP_MODE"] == "customers":
+                        self.send_json(404, {"error": "顧客管理専用版では利用できない機能です。"})
+                        return
                     self.handle_event_search(data)
                     return
-                if config["APP_MODE"] == "events":
-                    self.send_json(404, {"error": "イベント検索専用版では利用できない機能です。"})
+                if config["APP_MODE"] in {"events", "customers"}:
+                    message = "イベント検索専用版" if config["APP_MODE"] == "events" else "顧客管理専用版"
+                    self.send_json(404, {"error": f"{message}では利用できない機能です。"})
                     return
                 if self.path == "/api/jobs/search-and-append":
                     self.handle_job_search(data)
@@ -2714,7 +2731,7 @@ def make_handler(config, sheets, csrf_token):
                 self.send_security_headers()
                 secure = "" if is_local_host(self.headers.get("Host", "")) else "; Secure"
                 self.send_header("Set-Cookie", f"crm_session={cookie}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400{secure}")
-                destination = "/events.html" if cfg["APP_MODE"] == "events" else "/crm/index.html"
+                destination = app_landing_path(cfg["APP_MODE"])
                 self.send_header("Location", destination)
                 self.end_headers()
                 return
@@ -2738,7 +2755,7 @@ def make_handler(config, sheets, csrf_token):
             self.send_security_headers()
             secure = "" if is_local_host(self.headers.get("Host", "")) else "; Secure"
             self.send_header("Set-Cookie", f"crm_session={cookie}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400{secure}")
-            self.send_header("Location", "/events.html" if cfg["APP_MODE"] == "events" else "/crm/index.html")
+            self.send_header("Location", app_landing_path(cfg["APP_MODE"]))
             self.end_headers()
 
         def handle_admin_invite(self, member):
@@ -2823,9 +2840,9 @@ def make_handler(config, sheets, csrf_token):
         def send_admin_users_page(self, member, message="", is_error=False, invite_url=""):
             try:
                 user_list = users.list_users()
-                body = admin_users_page(user_list, member, csrf_token, message, is_error, invite_url).encode("utf-8")
+                body = admin_users_page(user_list, member, csrf_token, message, is_error, invite_url, config["APP_MODE"]).encode("utf-8")
             except Exception as error:
-                body = admin_users_page([], member, csrf_token, f"利用者一覧を取得できませんでした: {error}", True, "").encode("utf-8")
+                body = admin_users_page([], member, csrf_token, f"利用者一覧を取得できませんでした: {error}", True, "", config["APP_MODE"]).encode("utf-8")
             self.send_response(200)
             self.send_login_security_headers()
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -3073,18 +3090,25 @@ def session_member_from_cookie(cookie_header, secret):
     return member_id if hmac.compare_digest(signature, expected) else None
 
 
+def app_landing_path(app_mode):
+    return {"events": "/events.html", "customers": "/customers.html"}.get(app_mode, "/crm/index.html")
+
+
 def login_page(error="", app_mode="full"):
     error_html = f'<p class="error">{html.escape(error)}</p>' if error else ""
-    product_name = "SIGNAL" if app_mode == "events" else "テレアポCRM"
-    eyebrow = "SIGNAL" if app_mode == "events" else "Teleapo Command CRM"
-    description = "メールアドレスとパスワードを入力して、イベント検索に入ります。" if app_mode == "events" else "メールアドレスとパスワードを入力して、CRMと検索システムに入ります。"
+    product_name = "SIGNAL" if app_mode == "events" else ("SIGNAL CUSTOMER" if app_mode == "customers" else "テレアポCRM")
+    eyebrow = "SIGNAL" if app_mode in {"events", "customers"} else "Teleapo Command CRM"
+    description = {
+        "events": "メールアドレスとパスワードを入力して、イベント検索に入ります。",
+        "customers": "メールアドレスとパスワードを入力して、本人専用の顧客リストに入ります。",
+    }.get(app_mode, "メールアドレスとパスワードを入力して、CRMと検索システムに入ります。")
     return """<!doctype html>
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ログイン | """ + product_name + """</title>
-    """ + ('<link rel="icon" type="image/png" href="/assets/signal-icon.png" />' if app_mode == "events" else '') + """
+    """ + ('<link rel="icon" type="image/png" href="/assets/signal-icon.png" />' if app_mode in {"events", "customers"} else '') + """
     <style>
       :root {
         color-scheme: dark;
@@ -3174,7 +3198,7 @@ def login_page(error="", app_mode="full"):
       <section class="loginCard" aria-labelledby="loginTitle">
         <div class="brandRow">
           <div>
-            """ + ('<div class="signalBrand" aria-label="SIGNAL"><img src="/assets/signal-icon.png" alt="" /><span>SIGNAL</span></div>' if app_mode == "events" else '<p class="eyebrow">' + eyebrow + '</p>') + """
+            """ + ('<div class="signalBrand" aria-label="' + product_name + '"><img src="/assets/signal-icon.png" alt="" /><span>' + product_name + '</span></div>' if app_mode in {"events", "customers"} else '<p class="eyebrow">' + eyebrow + '</p>') + """
             <h1 id="loginTitle">ログイン</h1>
           </div>
           <button id="modeToggle" class="modeToggle" type="button">ライト</button>
@@ -3193,7 +3217,7 @@ def login_page(error="", app_mode="full"):
 
 
 def invite_page(token, error="", app_mode="events"):
-    product_name = "SIGNAL" if app_mode == "events" else "テレアポCRM"
+    product_name = "SIGNAL" if app_mode == "events" else ("SIGNAL CUSTOMER" if app_mode == "customers" else "テレアポCRM")
     message = f'<p class="message error">{html.escape(error)}</p>' if error else ""
     safe_token = html.escape(token or "", quote=True)
     disabled = " disabled" if not token else ""
@@ -3216,9 +3240,9 @@ def invite_page(token, error="", app_mode="events"):
   </style>
 </head>
 <body><main>
-  <div class="brand">SIGNAL</div>
+  <div class="brand">{html.escape(product_name)}</div>
   <h1>パスワード設定</h1>
-  <p>12文字以上のパスワードを設定してください。設定後、そのままSIGNALへログインします。</p>
+  <p>12文字以上のパスワードを設定してください。設定後、そのまま{html.escape(product_name)}へログインします。</p>
   {message}
   <form method="post" action="/invite/accept">
     <input type="hidden" name="token" value="{safe_token}" />
@@ -3230,7 +3254,7 @@ def invite_page(token, error="", app_mode="events"):
 </main></body></html>"""
 
 
-def admin_users_page(user_list, member, csrf_token, message="", is_error=False, invite_url=""):
+def admin_users_page(user_list, member, csrf_token, message="", is_error=False, invite_url="", app_mode="events"):
     status_labels = {"active": "利用中", "invited": "招待中", "disabled": "停止中"}
     rows = []
     for user in user_list:
@@ -3285,7 +3309,7 @@ def admin_users_page(user_list, member, csrf_token, message="", is_error=False, 
     @media(max-width:720px) {{ .tableWrap {{ overflow:auto; }} table {{ min-width:720px; }} header {{ align-items:flex-start; flex-direction:column; }} }}
   </style>
 </head><body><main>
-  <header><div><div class="brand">SIGNAL</div><h1>利用者管理</h1><div>{html.escape(member)}</div></div><a href="/events.html">イベント検索へ戻る</a></header>
+  <header><div><div class="brand">SIGNAL</div><h1>利用者管理</h1><div>{html.escape(member)}</div></div><a href="{app_landing_path(app_mode)}">サービスへ戻る</a></header>
   <section><h2>利用者を招待</h2><p>招待リンクは24時間・1回限り有効です。</p>{notice}
     <form method="post" action="/admin/invite">
       <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}" />

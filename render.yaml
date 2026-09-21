@@ -77,3 +77,40 @@ services:
         sync: false
       - key: VOICEVOX_SPEAKER
         value: 24
+  - type: web
+    name: signal-customer-search
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 app.py || python app.py
+    healthCheckPath: /login
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: ALLOW_REMOTE_ACCESS
+        value: true
+      - key: APP_MODE
+        value: customers
+      - key: REQUESTS_PER_15_MIN
+        value: 1000
+      - key: ACCESS_USERS_JSON
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_EMAILS
+        value: nblnetwork.000@gmail.com
+      - key: APP_BASE_URL
+        value: https://signal-customer-search.onrender.com
+      - key: RESEND_API_KEY
+        sync: false
+      - key: INVITE_FROM_EMAIL
+        value: SIGNAL <onboarding@resend.dev>
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SHEET_NAME
+        value: SIGNAL顧客リスト
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON_BASE64
+        sync: false
+      - key: VOICEVOX_SPEAKER
+        value: 24
