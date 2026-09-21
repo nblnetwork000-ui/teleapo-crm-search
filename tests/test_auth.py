@@ -86,6 +86,17 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(admin["role"], "admin")
         self.assertEqual(admin["status"], "active")
 
+    def test_bootstraps_missing_admin_without_overwriting_other_users(self):
+        self.sheets.sheets[app.USER_SHEET_NAME] = [
+            app.USER_HEADERS,
+            ["member@example.com", app.hash_password("member-password"), "member", "active"],
+        ]
+        admin = self.store.authenticate("admin@example.com", self.password)
+        self.assertIsNotNone(admin)
+        self.assertEqual(admin["role"], "admin")
+        users = self.store.list_users()
+        self.assertEqual([user["email"] for user in users], ["member@example.com", "admin@example.com"])
+
     def test_invite_accept_is_single_use(self):
         self.store.ensure_initialized()
         invite_url = self.store.invite("member@example.com", "https://signal.example")
