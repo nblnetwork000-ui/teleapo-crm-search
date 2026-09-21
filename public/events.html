@@ -105,6 +105,29 @@
           </div>
           <div class="grid">
             <label>
+              参加費の金額帯
+              <select id="eventFeeBand" name="feeBand">
+                <option value="all">指定なし</option>
+                <option value="free">無料</option>
+                <option value="under3000">1〜3,000円</option>
+                <option value="under5000">3,001〜5,000円</option>
+                <option value="under10000">5,001〜10,000円</option>
+                <option value="over10000">10,001円以上</option>
+                <option value="unknown">金額不明</option>
+              </select>
+            </label>
+            <label>
+              参加費の並び順
+              <select id="eventFeeSort" name="feeSort">
+                <option value="date">開催日順</option>
+                <option value="low">安い順</option>
+                <option value="high">高い順</option>
+              </select>
+            </label>
+          </div>
+          <p class="fieldHint">掲載元から取得できた参加費で判定します。複数料金は最安額、金額不明は並び替え時に最後へ表示します。</p>
+          <div class="grid">
+            <label>
               件数
               <input id="eventResults" name="results" type="number" min="1" max="100" value="20" required />
             </label>

@@ -77,6 +77,8 @@ eventForm.addEventListener('submit', async (event) => {
     source: formData.get('source'),
     dateFrom: formData.get('dateFrom'),
     dateTo: formData.get('dateTo'),
+    feeBand: formData.get('feeBand'),
+    feeSort: formData.get('feeSort'),
     results: Number(formData.get('results')),
     start: 1,
     futureOnly: formData.get('futureOnly') === 'on',

@@ -89,6 +89,7 @@ h2 { font-size: 20px; }
 }
 
 .form { display: grid; gap: 13px; }
+.fieldHint { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: -6px; }
 .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 2px; }
 .tabButton {
   background: #162238;
