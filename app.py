@@ -3149,7 +3149,7 @@ def login_page(error="", app_mode="full"):
         --field: rgb(255 255 255 / 86%);
       }
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; overflow: hidden; }
+      body { margin: 0; min-height: 100vh; overflow: hidden; isolation: isolate; }
       .bgVideo, .bgFallback, .shade { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
       .bgVideo { display: none; object-fit: cover; z-index: -3; }
       .bgFallback { z-index: -4; background: url('/business-login-bg.jpg') center / cover no-repeat; transform: scale(1.025); animation: loginDrift 20s ease-in-out infinite alternate; }
