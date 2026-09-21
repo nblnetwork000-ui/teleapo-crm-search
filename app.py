@@ -1673,10 +1673,14 @@ class UserStore:
             values = self.sheets.get_values(self.config["GOOGLE_SHEET_ID"], header_range).get("values", [])
             if not values or values[0] != USER_HEADERS:
                 self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], header_range, [USER_HEADERS])
-            if not self.list_users(skip_ensure=True) and self.config["ACCESS_USERS"]:
+            existing_users = self.list_users(skip_ensure=True)
+            known_emails = {user["email"] for user in existing_users}
+            if self.config["ACCESS_USERS"]:
                 now = utc_timestamp()
                 rows = []
                 for email_address, password_hash in self.config["ACCESS_USERS"].items():
+                    if email_address in known_emails:
+                        continue
                     rows.append(
                         [
                             email_address,
@@ -1690,12 +1694,13 @@ class UserStore:
                             "",
                         ]
                     )
-                self.sheets.append_values(
-                    self.config["GOOGLE_SHEET_ID"],
-                    f"{quote_sheet_name(USER_SHEET_NAME)}!A:I",
-                    rows,
-                )
-            elif not self.list_users(skip_ensure=True) and self.config.get("ACCESS_PASSWORD"):
+                if rows:
+                    self.sheets.append_values(
+                        self.config["GOOGLE_SHEET_ID"],
+                        f"{quote_sheet_name(USER_SHEET_NAME)}!A:I",
+                        rows,
+                    )
+            elif not existing_users and self.config.get("ACCESS_PASSWORD"):
                 now = utc_timestamp()
                 legacy_email = (self.config.get("ACCESS_MEMBER_ID") or "member").strip().lower()
                 self.sheets.append_values(
@@ -2595,7 +2600,12 @@ def make_handler(config, sheets, csrf_token):
             password = (params.get("password") or [""])[0]
             try:
                 authenticated_user = users.authenticate(member_id, password)
-            except Exception:
+            except Exception as error:
+                print(
+                    f"LOGIN_AUTH_ERROR {type(error).__name__} "
+                    f"status={getattr(error, 'code', '')} url={getattr(error, 'url', '')}",
+                    flush=True,
+                )
                 authenticated_user = None
             if authenticated_user:
                 cookie = make_session_cookie(member_id or "member", cfg["SESSION_SECRET"])
