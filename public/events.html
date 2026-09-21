@@ -21,7 +21,10 @@
             <p>営業機会につながるイベントを見つける</p>
             <p id="sheetName">追記先: 読み込み中</p>
           </div>
-          <button id="appearanceToggle" class="modeToggle" type="button" aria-pressed="false">ライト</button>
+          <div class="headingActions">
+            <button id="guideOpenButton" class="guideOpenButton" type="button">使い方</button>
+            <button id="appearanceToggle" class="modeToggle" type="button" aria-pressed="false">ライト</button>
+          </div>
         </div>
 
         <form id="eventForm" class="form searchForm">
@@ -171,5 +174,22 @@
         </div>
       </section>
     </main>
+    <dialog id="onboardingDialog" class="onboardingDialog" aria-labelledby="onboardingTitle" aria-describedby="onboardingDescription">
+      <div class="onboardingHeader">
+        <span class="onboardingBrand">SIGNAL GUIDE</span>
+        <span id="onboardingProgress" class="onboardingProgress"></span>
+      </div>
+      <p id="onboardingSection" class="onboardingSection"></p>
+      <h2 id="onboardingTitle"></h2>
+      <p id="onboardingDescription" class="onboardingDescription"></p>
+      <div id="onboardingTip" class="onboardingTip"></div>
+      <div class="onboardingActions">
+        <button id="onboardingSkip" class="onboardingSecondary" type="button">スキップ</button>
+        <div class="onboardingNavigation">
+          <button id="onboardingBack" class="onboardingSecondary" type="button">戻る</button>
+          <button id="onboardingNext" type="button">次へ</button>
+        </div>
+      </div>
+    </dialog>
   </body>
 </html>

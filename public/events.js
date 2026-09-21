@@ -12,6 +12,45 @@ const summary = document.querySelector('#summary');
 const statusBox = document.querySelector('#status');
 const sheetName = document.querySelector('#sheetName');
 const adminUsersLink = document.querySelector('#adminUsersLink');
+const guideOpenButton = document.querySelector('#guideOpenButton');
+const onboardingDialog = document.querySelector('#onboardingDialog');
+const onboardingProgress = document.querySelector('#onboardingProgress');
+const onboardingSection = document.querySelector('#onboardingSection');
+const onboardingTitle = document.querySelector('#onboardingTitle');
+const onboardingDescription = document.querySelector('#onboardingDescription');
+const onboardingTip = document.querySelector('#onboardingTip');
+const onboardingSkip = document.querySelector('#onboardingSkip');
+const onboardingBack = document.querySelector('#onboardingBack');
+const onboardingNext = document.querySelector('#onboardingNext');
+
+const ONBOARDING_STEPS = [
+  {
+    section: 'はじめに',
+    title: 'SIGNALへようこそ',
+    description: 'イベント検索から候補の比較まで、この画面で行えます。最初に基本操作を4つの手順で確認します。',
+    tip: '検索だけならデータは保存されません。まずはシートへの追記をオフのままお試しください。'
+  },
+  {
+    section: '検索条件',
+    title: '条件を指定して検索',
+    description: '左側でキーワード、地域、掲載元、開催期間、参加費を指定し、「イベント検索」を押します。',
+    tip: '条件を増やし過ぎると結果が少なくなります。まずはキーワードと地域から始めるのがおすすめです。'
+  },
+  {
+    section: '検索結果',
+    title: '詳細は掲載元で確認',
+    description: '右側にイベント名、開催場所、時間、参加費が表示されます。「詳細を見る」で掲載元のページを開けます。',
+    tip: '「要確認」は情報を取得できなかった項目です。日時・料金・申込条件は掲載元で最終確認してください。'
+  },
+  {
+    section: '結果の保存',
+    title: '必要な結果だけシートへ',
+    description: 'Googleシートに記録する場合のみ「シートへ追記」をオンにして、もう一度検索します。',
+    tip: '検索後は「取得・追記・スキップ」の件数を確認してください。この案内は「使い方」からいつでも見直せます。'
+  }
+];
+let onboardingStepIndex = 0;
+let onboardingStorageKey = '';
 
 const AREA_DETAILS = {
   '北海道': ['札幌市', '函館市', '旭川市', '帯広市', '釧路市', '小樽市'],
@@ -66,6 +105,52 @@ if (appConfig.webSearchAvailable) {
 }
 if (appConfig.isAdmin) {
   adminUsersLink.hidden = false;
+}
+onboardingStorageKey = `signal-event-onboarding-v1:${String(appConfig.memberEmail || '').trim().toLowerCase()}`;
+guideOpenButton.addEventListener('click', () => openOnboarding());
+onboardingSkip.addEventListener('click', () => closeOnboarding());
+onboardingBack.addEventListener('click', () => {
+  onboardingStepIndex = Math.max(0, onboardingStepIndex - 1);
+  renderOnboardingStep();
+});
+onboardingNext.addEventListener('click', () => {
+  if (onboardingStepIndex === ONBOARDING_STEPS.length - 1) {
+    closeOnboarding();
+    return;
+  }
+  onboardingStepIndex += 1;
+  renderOnboardingStep();
+});
+onboardingDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeOnboarding();
+});
+if (localStorage.getItem(onboardingStorageKey) !== 'done') {
+  openOnboarding();
+}
+
+function openOnboarding() {
+  onboardingStepIndex = 0;
+  renderOnboardingStep();
+  if (!onboardingDialog.open) onboardingDialog.showModal();
+  onboardingNext.focus();
+}
+
+function closeOnboarding() {
+  localStorage.setItem(onboardingStorageKey, 'done');
+  onboardingDialog.close();
+  guideOpenButton.focus();
+}
+
+function renderOnboardingStep() {
+  const step = ONBOARDING_STEPS[onboardingStepIndex];
+  onboardingProgress.textContent = `${onboardingStepIndex + 1} / ${ONBOARDING_STEPS.length}`;
+  onboardingSection.textContent = step.section;
+  onboardingTitle.textContent = step.title;
+  onboardingDescription.textContent = step.description;
+  onboardingTip.textContent = step.tip;
+  onboardingBack.hidden = onboardingStepIndex === 0;
+  onboardingNext.textContent = onboardingStepIndex === ONBOARDING_STEPS.length - 1 ? '検索画面へ' : '次へ';
 }
 
 eventForm.addEventListener('submit', async (event) => {
