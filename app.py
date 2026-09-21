@@ -2601,9 +2601,10 @@ def make_handler(config, sheets, csrf_token):
             try:
                 authenticated_user = users.authenticate(member_id, password)
             except Exception as error:
+                detail = re.sub(r"\s+", " ", str(error))[:400]
                 print(
                     f"LOGIN_AUTH_ERROR {type(error).__name__} "
-                    f"status={getattr(error, 'code', '')} url={getattr(error, 'url', '')}",
+                    f"detail={detail}",
                     flush=True,
                 )
                 authenticated_user = None
