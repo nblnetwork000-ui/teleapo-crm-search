@@ -216,25 +216,11 @@ class HttpAuthFlowTests(unittest.TestCase):
         member_config = json.loads(member.open(self.base_url + "/api/config", timeout=5).read())
         self.assertFalse(member_config["isAdmin"])
 
-        def customer_request(opener, items):
-            return opener.open(
-                urllib.request.Request(
-                    self.base_url + "/api/customers",
-                    data=json.dumps({"items": items}).encode("utf-8"),
-                    method="POST",
-                    headers={"Content-Type": "application/json", "x-csrf-token": "test-csrf-token"},
-                ),
-                timeout=5,
-            )
-
-        customer = json.loads(customer_request(member, [{"name": "member's customer", "owner": "admin@example.com"}]).read())["items"][0]
-        self.assertEqual(customer["owner"], "member@example.com")
-        admin_items = json.loads(self.admin.open(self.base_url + "/api/customers", timeout=5).read())["items"]
-        self.assertEqual(admin_items, [])
-        admin_customer = json.loads(customer_request(self.admin, [{"id": customer["id"], "name": "admin's own customer"}]).read())["items"][0]
-        self.assertEqual(admin_customer["owner"], "admin@example.com")
-        member_items = json.loads(member.open(self.base_url + "/api/customers", timeout=5).read())["items"]
-        self.assertEqual(member_items[0]["name"], "member's customer")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            member.open(self.base_url + "/api/customers", timeout=5)
+        self.assertEqual(caught.exception.code, 404)
+        redirected = member.open(self.base_url + "/customers.html", timeout=5)
+        self.assertTrue(redirected.geturl().endswith("/events.html"))
 
         self._post(
             self.admin,
@@ -247,6 +233,64 @@ class HttpAuthFlowTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:
             member.open(self.base_url + "/api/customers", timeout=5)
         self.assertEqual(caught.exception.code, 401)
+
+
+class CustomerModeHttpTests(unittest.TestCase):
+    def setUp(self):
+        self.admin_password = "very-secure-password"
+        self.config = {
+            "ALLOW_REMOTE_ACCESS": True, "ACCESS_PASSWORD": "", "ACCESS_MEMBER_ID": "",
+            "ACCESS_USERS": {"admin@example.com": app.hash_password(self.admin_password)},
+            "ADMIN_EMAILS": {"admin@example.com"}, "SESSION_SECRET": "test-session-secret",
+            "APP_MODE": "customers", "MAX_RESULTS_PER_RUN": 100, "SKIP_DUPLICATES": True,
+            "GOOGLE_SHEET_ID": "sheet-id", "GOOGLE_SHEET_NAME": "顧客リスト",
+            "BRAVE_SEARCH_API_KEY": "", "APP_BASE_URL": "", "RESEND_API_KEY": "",
+            "INVITE_FROM_EMAIL": "SIGNAL <onboarding@example.com>", "REQUESTS_PER_15_MIN": 1000,
+        }
+        self.sheets = FakeSheets()
+        handler = app.make_handler(self.config, self.sheets, "test-csrf-token")
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+        self.admin = self._opener()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    @staticmethod
+    def _opener():
+        return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def _post(self, opener, path, values):
+        body = urllib.parse.urlencode(values).encode("utf-8")
+        return opener.open(urllib.request.Request(self.base_url + path, data=body, method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"}), timeout=5)
+
+    def test_customer_mode_is_independent_and_owner_scoped(self):
+        login = self._post(self.admin, "/login", {"email": "admin@example.com", "password": self.admin_password})
+        self.assertTrue(login.geturl().endswith("/customers.html"))
+        redirected = self.admin.open(self.base_url + "/events.html", timeout=5)
+        self.assertTrue(redirected.geturl().endswith("/customers.html"))
+
+        store = app.UserStore(self.sheets, self.config)
+        invite_url = store.invite("member@example.com", self.base_url)
+        token = invite_url.split("token=", 1)[1]
+        member = self._opener()
+        accepted = self._post(member, "/invite/accept", {"token": token, "password": "member-secure-password", "password_confirm": "member-secure-password"})
+        self.assertTrue(accepted.geturl().endswith("/customers.html"))
+
+        def save(opener, items):
+            request = urllib.request.Request(self.base_url + "/api/customers", data=json.dumps({"items": items}).encode(), method="POST", headers={"Content-Type": "application/json", "x-csrf-token": "test-csrf-token"})
+            return json.loads(opener.open(request, timeout=5).read())["items"]
+
+        member_customer = save(member, [{"name": "member's customer", "owner": "admin@example.com"}])[0]
+        self.assertEqual(member_customer["owner"], "member@example.com")
+        self.assertEqual(json.loads(self.admin.open(self.base_url + "/api/customers", timeout=5).read())["items"], [])
+        admin_customer = save(self.admin, [{"id": member_customer["id"], "name": "admin's own customer"}])[0]
+        self.assertEqual(admin_customer["owner"], "admin@example.com")
+        self.assertEqual(json.loads(member.open(self.base_url + "/api/customers", timeout=5).read())["items"][0]["name"], "member's customer")
 
 
 if __name__ == "__main__":
