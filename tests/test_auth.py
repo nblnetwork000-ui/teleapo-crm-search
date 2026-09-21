@@ -56,10 +56,10 @@ class FakeSheets:
 
     @staticmethod
     def _parse_range(range_name):
-        whole_columns = re.match(r"'((?:[^']|'')+)'!A:I$", range_name)
+        whole_columns = re.match(r"'((?:[^']|'')+)'!A:[A-Z]+$", range_name)
         if whole_columns:
             return whole_columns.group(1).replace("''", "'"), 1, 10000
-        match = re.match(r"'((?:[^']|'')+)'!A(\d+)(?::I?(\d+)?)?", range_name)
+        match = re.match(r"'((?:[^']|'')+)'!A(\d+)(?::[A-Z]+(\d+)?)?$", range_name)
         if not match:
             raise AssertionError(f"Unsupported range: {range_name}")
         title = match.group(1).replace("''", "'")
@@ -120,6 +120,15 @@ class AuthTests(unittest.TestCase):
     def test_password_requires_twelve_characters(self):
         with self.assertRaises(app.InputError):
             app.hash_password("too-short")
+
+    def test_customers_are_separate_by_owner(self):
+        store = app.CustomerStore(self.sheets, self.config)
+        saved = store.save("member@example.com", [{"name": "A社", "memo": "担当者情報"}])[0]
+        self.assertEqual([item["name"] for item in store.list_for("member@example.com")], ["A社"])
+        self.assertEqual(store.list_for("other@example.com"), [])
+        store.save("other@example.com", [{"id": saved["id"], "name": "別ユーザーの同じID"}])
+        self.assertEqual(store.list_for("member@example.com")[0]["name"], "A社")
+        self.assertEqual(store.list_for("other@example.com")[0]["name"], "別ユーザーの同じID")
 
 
 class HttpAuthFlowTests(unittest.TestCase):
@@ -207,6 +216,26 @@ class HttpAuthFlowTests(unittest.TestCase):
         member_config = json.loads(member.open(self.base_url + "/api/config", timeout=5).read())
         self.assertFalse(member_config["isAdmin"])
 
+        def customer_request(opener, items):
+            return opener.open(
+                urllib.request.Request(
+                    self.base_url + "/api/customers",
+                    data=json.dumps({"items": items}).encode("utf-8"),
+                    method="POST",
+                    headers={"Content-Type": "application/json", "x-csrf-token": "test-csrf-token"},
+                ),
+                timeout=5,
+            )
+
+        customer = json.loads(customer_request(member, [{"name": "member's customer", "owner": "admin@example.com"}]).read())["items"][0]
+        self.assertEqual(customer["owner"], "member@example.com")
+        admin_items = json.loads(self.admin.open(self.base_url + "/api/customers", timeout=5).read())["items"]
+        self.assertEqual(admin_items, [])
+        admin_customer = json.loads(customer_request(self.admin, [{"id": customer["id"], "name": "admin's own customer"}]).read())["items"][0]
+        self.assertEqual(admin_customer["owner"], "admin@example.com")
+        member_items = json.loads(member.open(self.base_url + "/api/customers", timeout=5).read())["items"]
+        self.assertEqual(member_items[0]["name"], "member's customer")
+
         self._post(
             self.admin,
             "/admin/users/status",
@@ -214,6 +243,9 @@ class HttpAuthFlowTests(unittest.TestCase):
         )
         with self.assertRaises(urllib.error.HTTPError) as caught:
             member.open(self.base_url + "/api/config", timeout=5)
+        self.assertEqual(caught.exception.code, 401)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            member.open(self.base_url + "/api/customers", timeout=5)
         self.assertEqual(caught.exception.code, 401)
 
 
