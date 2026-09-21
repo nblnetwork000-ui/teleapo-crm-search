@@ -2499,7 +2499,7 @@ def make_handler(config, sheets, csrf_token):
             if parsed.path == "/logout":
                 self.handle_logout()
                 return
-            if parsed.path in {"/login-bg.jpg", "/login-bg.mp4", "/assets/signal-icon.png", "/assets/signal-logo.png"}:
+            if parsed.path in {"/login-bg.jpg", "/business-login-bg.jpg", "/login-bg.mp4", "/assets/signal-icon.png", "/assets/signal-logo.png"}:
                 self.serve_static(parsed.path)
                 return
             if not self.require_login(config):
@@ -2840,9 +2840,27 @@ def make_handler(config, sheets, csrf_token):
         def send_admin_users_page(self, member, message="", is_error=False, invite_url=""):
             try:
                 user_list = users.list_users()
-                body = admin_users_page(user_list, member, csrf_token, message, is_error, invite_url, config["APP_MODE"]).encode("utf-8")
+                body = admin_users_page(
+                    user_list,
+                    member,
+                    csrf_token,
+                    message,
+                    is_error,
+                    invite_url,
+                    config["APP_MODE"],
+                    bool(config["RESEND_API_KEY"]),
+                ).encode("utf-8")
             except Exception as error:
-                body = admin_users_page([], member, csrf_token, f"利用者一覧を取得できませんでした: {error}", True, "", config["APP_MODE"]).encode("utf-8")
+                body = admin_users_page(
+                    [],
+                    member,
+                    csrf_token,
+                    f"利用者一覧を取得できませんでした: {error}",
+                    True,
+                    "",
+                    config["APP_MODE"],
+                    bool(config["RESEND_API_KEY"]),
+                ).encode("utf-8")
             self.send_response(200)
             self.send_login_security_headers()
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -3134,9 +3152,9 @@ def login_page(error="", app_mode="full"):
       body { margin: 0; min-height: 100vh; overflow: hidden; }
       .bgVideo, .bgFallback, .shade { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
       .bgVideo { display: none; object-fit: cover; z-index: -3; }
-      .bgFallback { z-index: -4; background: url('/login-bg.jpg') center / cover no-repeat; transform: scale(1.04); animation: loginDrift 16s ease-in-out infinite alternate; }
-      .shade { z-index: -2; background: radial-gradient(circle at 50% 45%, rgb(56 189 248 / 12%), transparent 34%), linear-gradient(90deg, rgb(3 7 18 / 72%), rgb(3 7 18 / 38%), rgb(3 7 18 / 72%)); }
-      :root[data-theme="light"] .shade { background: radial-gradient(circle at 50% 45%, rgb(56 189 248 / 16%), transparent 34%), linear-gradient(90deg, rgb(246 248 251 / 62%), rgb(246 248 251 / 30%), rgb(246 248 251 / 66%)); }
+      .bgFallback { z-index: -4; background: url('/business-login-bg.jpg') center / cover no-repeat; transform: scale(1.025); animation: loginDrift 20s ease-in-out infinite alternate; }
+      .shade { z-index: -2; background: radial-gradient(circle at 50% 44%, rgb(15 23 42 / 22%), transparent 33%), linear-gradient(90deg, rgb(2 6 23 / 70%), rgb(2 6 23 / 46%), rgb(2 6 23 / 72%)); }
+      :root[data-theme="light"] .shade { background: radial-gradient(circle at 50% 45%, rgb(255 255 255 / 18%), transparent 34%), linear-gradient(90deg, rgb(238 244 250 / 62%), rgb(238 244 250 / 34%), rgb(238 244 250 / 66%)); }
       @keyframes loginDrift { from { transform: scale(1.04) translate3d(-8px, -6px, 0); } to { transform: scale(1.09) translate3d(10px, 8px, 0); } }
       main { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
       .loginCard {
@@ -3254,7 +3272,7 @@ def invite_page(token, error="", app_mode="events"):
 </main></body></html>"""
 
 
-def admin_users_page(user_list, member, csrf_token, message="", is_error=False, invite_url="", app_mode="events"):
+def admin_users_page(user_list, member, csrf_token, message="", is_error=False, invite_url="", app_mode="events", mail_delivery_enabled=False):
     status_labels = {"active": "利用中", "invited": "招待中", "disabled": "停止中"}
     rows = []
     for user in user_list:
@@ -3290,27 +3308,36 @@ def admin_users_page(user_list, member, csrf_token, message="", is_error=False, 
     link_panel = ""
     if invite_url:
         safe_url = html.escape(invite_url, quote=True)
-        link_panel = f'<div class="inviteLink"><strong>招待リンク</strong><input value="{safe_url}" readonly onclick="this.select()" /><small>メール送信未設定の場合は、このリンクを本人へ共有してください。</small></div>'
+        link_panel = f'''<div class="inviteLink">
+          <strong>招待リンク</strong>
+          <div class="copyRow"><input value="{safe_url}" readonly id="inviteUrl" onclick="this.select()" /><button class="secondary" type="button" onclick="copyInviteUrl(this)">コピー</button></div>
+          <small>{"招待メールを送信済みです。届かない場合は、このリンクを本人へ共有してください。" if mail_delivery_enabled else "このリンクを本人へ共有してください。24時間・1回限り有効です。"}</small>
+        </div>'''
+    delivery_status = "メール自動送信：有効" if mail_delivery_enabled else "メール自動送信：未設定（招待リンクを共有）"
     return f"""<!doctype html>
 <html lang="ja"><head>
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>利用者管理 | SIGNAL</title><link rel="icon" type="image/png" href="/assets/signal-icon.png" />
   <style>
-    :root {{ color-scheme:dark; font-family:system-ui,sans-serif; background:#050814; color:#e5eefb; }} * {{ box-sizing:border-box; }} body {{ margin:0; }}
-    main {{ width:min(1050px,calc(100% - 28px)); margin:28px auto; }} header {{ display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:20px; }}
-    h1 {{ margin:4px 0; }} .brand {{ color:#38bdf8; font-weight:950; letter-spacing:.08em; }} a {{ color:#7dd3fc; }}
-    section {{ background:#0b1323; border:1px solid #ffffff18; border-radius:12px; padding:20px; margin-bottom:20px; }}
+    :root {{ color-scheme:dark; font-family:Inter,"Noto Sans JP",system-ui,sans-serif; background:#07101f; color:#eaf1f8; }} * {{ box-sizing:border-box; }} body {{ margin:0; min-height:100vh; background:linear-gradient(160deg,#07101f 0%,#0b1729 55%,#101c2d 100%); }}
+    main {{ width:min(1100px,calc(100% - 28px)); margin:30px auto 56px; }} header {{ display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:22px; }}
+    h1 {{ margin:4px 0; }} h2 {{ margin-top:0; }} .brand {{ color:#7dd3fc; font-weight:950; letter-spacing:.12em; }} a {{ color:#8fdcff; }}
+    section {{ background:rgb(10 22 39 / 92%); border:1px solid #ffffff16; border-radius:14px; padding:22px; margin-bottom:20px; box-shadow:0 20px 55px #02061745; }}
     form {{ display:flex; gap:10px; align-items:end; flex-wrap:wrap; }} label {{ display:grid; gap:7px; min-width:min(360px,100%); font-size:13px; font-weight:800; }}
     input {{ padding:11px 12px; border:1px solid #ffffff25; border-radius:8px; background:#081120; color:#fff; font:inherit; }}
     button {{ padding:11px 15px; border:0; border-radius:8px; background:#38bdf8; color:#06101d; font-weight:900; cursor:pointer; }} button.secondary {{ background:#24344d; color:#e5eefb; padding:8px 10px; }}
     table {{ width:100%; border-collapse:collapse; }} th,td {{ text-align:left; padding:12px 10px; border-bottom:1px solid #ffffff14; }} th {{ color:#91a7c4; font-size:12px; }}
     .status {{ display:inline-block; padding:5px 8px; border-radius:999px; font-size:12px; font-weight:850; background:#334155; }} .status.active {{ background:#14532d; }} .status.invited {{ background:#854d0e; }}
-    .notice {{ padding:11px 13px; border-radius:8px; background:#0c4a6e; }} .notice.error {{ background:#611c1c; }} .inviteLink {{ display:grid; gap:8px; margin-top:14px; }} small {{ color:#9fb0c7; }}
-    @media(max-width:720px) {{ .tableWrap {{ overflow:auto; }} table {{ min-width:720px; }} header {{ align-items:flex-start; flex-direction:column; }} }}
+    .notice {{ padding:11px 13px; border-radius:8px; background:#0c4a6e; }} .notice.error {{ background:#611c1c; }} .inviteLink {{ display:grid; gap:8px; margin-top:16px; padding:16px; border:1px solid #38bdf845; border-radius:10px; background:#071525; }} .copyRow {{ display:grid; grid-template-columns:1fr auto; gap:8px; }} small {{ color:#9fb0c7; }}
+    .flow {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0 20px; }} .step {{ padding:14px; border:1px solid #ffffff14; border-radius:10px; background:#0a182a; }} .step b {{ display:block; color:#7dd3fc; margin-bottom:5px; }} .delivery {{ display:inline-flex; margin:0 0 16px; padding:7px 10px; border-radius:999px; background:#17283e; color:#b9c9dc; font-size:12px; font-weight:800; }}
+    @media(max-width:720px) {{ .tableWrap {{ overflow:auto; }} table {{ min-width:720px; }} header {{ align-items:flex-start; flex-direction:column; }} .flow {{ grid-template-columns:1fr 1fr; }} .copyRow {{ grid-template-columns:1fr; }} }}
   </style>
 </head><body><main>
   <header><div><div class="brand">SIGNAL</div><h1>利用者管理</h1><div>{html.escape(member)}</div></div><a href="{app_landing_path(app_mode)}">サービスへ戻る</a></header>
-  <section><h2>利用者を招待</h2><p>招待リンクは24時間・1回限り有効です。</p>{notice}
+  <section><h2>招待から利用開始まで</h2>
+    <div class="flow"><div class="step"><b>1. メール登録</b>管理者が利用者のメールアドレスを登録</div><div class="step"><b>2. 招待共有</b>メールまたは招待リンクを本人へ共有</div><div class="step"><b>3. 本人認証</b>本人が12文字以上のパスワードを設定</div><div class="step"><b>4. 利用開始</b>設定完了後、そのままSIGNALへログイン</div></div>
+    <span class="delivery">{delivery_status}</span>
+    <h2>利用者を招待</h2><p>招待リンクは24時間・1回限り有効です。</p>{notice}
     <form method="post" action="/admin/invite">
       <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}" />
       <label>メールアドレス<input name="email" type="email" required placeholder="user@example.com" /></label>
@@ -3318,6 +3345,7 @@ def admin_users_page(user_list, member, csrf_token, message="", is_error=False, 
     </form>{link_panel}
   </section>
   <section><h2>登録済み利用者</h2><div class="tableWrap"><table><thead><tr><th>メールアドレス</th><th>権限</th><th>状態</th><th>更新</th><th>操作</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
+  <script>async function copyInviteUrl(button) {{ const input=document.getElementById('inviteUrl'); if(!input)return; await navigator.clipboard.writeText(input.value); button.textContent='コピー済み'; setTimeout(()=>button.textContent='コピー',1600); }}</script>
 </main></body></html>"""
 
 
