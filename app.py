@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -322,6 +323,12 @@ def parse_event_search_input(data, max_results):
     date_to = clean_optional_date(data.get("dateTo"), "開催日の終了")
     if date_from and date_to and date_from > date_to:
         raise InputError("開催日の終了は開始日以降を指定してください。")
+    fee_band = data.get("feeBand", "all")
+    if fee_band not in {"all", "free", "under3000", "under5000", "under10000", "over10000", "unknown"}:
+        raise InputError("参加費の金額帯が不正です。")
+    fee_sort = data.get("feeSort", "date")
+    if fee_sort not in {"date", "low", "high"}:
+        raise InputError("参加費の並び順が不正です。")
     return {
         "keyword": clean_text(data.get("keyword"), "キーワード"),
         "area": clean_optional_text(data.get("area", ""), "エリア"),
@@ -330,6 +337,8 @@ def parse_event_search_input(data, max_results):
         "futureOnly": data.get("futureOnly") is not False and not (date_from or date_to),
         "dateFrom": date_from,
         "dateTo": date_to,
+        "feeBand": fee_band,
+        "feeSort": fee_sort,
         "source": source,
         "append": data.get("append") is not False,
     }
@@ -498,6 +507,7 @@ def search_connpass_events(search, brave_search_api_key=""):
         events = merge_event_sources(*successful_sources)
     events = filter_events_by_area(events, search["area"])
     events = filter_events_by_date_range(events, search["dateFrom"], search["dateTo"])
+    events = filter_and_sort_events_by_fee(events, search["feeBand"], search["feeSort"])
     events = events[: search["results"]]
     return {
         "total": len(events),
@@ -807,19 +817,36 @@ def parse_external_jsonld_events(text, page_url, source_name):
             started_at = as_text(event.get("startDate"))
             if not started_at:
                 continue
-            items.append(
-                make_external_event(
-                    title=as_text(event.get("name")),
-                    started_at=started_at,
-                    ended_at=as_text(event.get("endDate")),
-                    place=as_text(location.get("name")),
-                    address=as_text(address_value),
-                    url=url,
-                    source_name=source_name,
-                    owner=as_text(event.get("organizer")),
-                )
+            item = make_external_event(
+                title=as_text(event.get("name")),
+                started_at=started_at,
+                ended_at=as_text(event.get("endDate")),
+                place=as_text(location.get("name")),
+                address=as_text(address_value),
+                url=url,
+                source_name=source_name,
+                owner=as_text(event.get("organizer")),
             )
+            item["fee"] = fee_from_jsonld_offers(event.get("offers")) or item["fee"]
+            items.append(item)
     return items
+
+
+def fee_from_jsonld_offers(offers):
+    candidates = offers if isinstance(offers, list) else [offers]
+    prices = []
+    for offer in candidates:
+        if not isinstance(offer, dict) or as_text(offer.get("priceCurrency")).upper() not in {"", "JPY"}:
+            continue
+        raw_price = offer.get("lowPrice", offer.get("price"))
+        if isinstance(raw_price, (int, float, str)):
+            price = as_text(raw_price).replace(",", "").strip()
+            if re.fullmatch(r"\d+(?:\.\d+)?", price):
+                prices.append(int(float(price)))
+    if not prices:
+        return ""
+    minimum = min(prices)
+    return "無料" if minimum == 0 else f"{minimum:,}円"
 
 
 def iter_jsonld_events(value):
@@ -999,6 +1026,47 @@ def filter_events_by_date_range(events, date_from="", date_to=""):
             continue
         filtered.append(item)
     return filtered
+
+
+def event_fee_amount(value):
+    fee = unicodedata.normalize("NFKC", as_text(value)).strip().lower()
+    if not fee:
+        return None
+    if "無料" in fee or re.search(r"\bfree\b", fee):
+        return 0
+    amounts = []
+    patterns = (
+        r"(\d[\d,]*)\s*[〜～~\-]\s*(?:[¥￥]\s*)?\d[\d,]*\s*円",
+        r"[¥￥]\s*(\d[\d,]*)",
+        r"(\d[\d,]*)\s*円",
+    )
+    for pattern in patterns:
+        amounts.extend(int(match.replace(",", "")) for match in re.findall(pattern, fee))
+    amounts.extend(int(float(match) * 1000) for match in re.findall(r"(\d+(?:\.\d+)?)\s*千円", fee))
+    if amounts:
+        return min(amounts)
+    if re.fullmatch(r"\d[\d,]*", fee):
+        return int(fee.replace(",", ""))
+    return None
+
+
+def filter_and_sort_events_by_fee(events, fee_band="all", fee_sort="date"):
+    bands = {
+        "free": lambda amount: amount == 0,
+        "under3000": lambda amount: amount is not None and 1 <= amount <= 3000,
+        "under5000": lambda amount: amount is not None and 3001 <= amount <= 5000,
+        "under10000": lambda amount: amount is not None and 5001 <= amount <= 10000,
+        "over10000": lambda amount: amount is not None and amount >= 10001,
+        "unknown": lambda amount: amount is None,
+    }
+    annotated = [(item, event_fee_amount(item.get("fee"))) for item in events]
+    if fee_band != "all":
+        annotated = [(item, amount) for item, amount in annotated if bands[fee_band](amount)]
+    if fee_sort == "low":
+        annotated.sort(key=lambda pair: (pair[1] is None, pair[1] if pair[1] is not None else 0))
+    elif fee_sort == "high":
+        annotated.sort(key=lambda pair: (pair[1] is None, -(pair[1] if pair[1] is not None else 0)))
+    return [item for item, _amount in annotated]
 
 
 def search_web_events(api_key, search):
@@ -1278,6 +1346,7 @@ def parse_kokuchpro_search_html(text):
                 "hashTag": "",
                 "eventId": kokuchpro_event_id(url),
                 "source": "こくちーずプロ",
+                "fee": fee_from_jsonld_offers(data.get("offers")),
             }
         )
     return items
