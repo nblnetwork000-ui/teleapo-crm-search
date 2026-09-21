@@ -3151,12 +3151,12 @@ def login_page(error="", app_mode="full"):
       * { box-sizing: border-box; }
       body { margin: 0; min-height: 100vh; overflow: hidden; isolation: isolate; }
       .bgVideo, .bgFallback, .shade { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-      .bgVideo { display: none; object-fit: cover; z-index: -3; }
-      .bgFallback { z-index: -4; background: url('/business-login-bg.jpg') center / cover no-repeat; transform: scale(1.025); animation: loginDrift 20s ease-in-out infinite alternate; }
-      .shade { z-index: -2; background: radial-gradient(circle at 50% 44%, rgb(15 23 42 / 22%), transparent 33%), linear-gradient(90deg, rgb(2 6 23 / 70%), rgb(2 6 23 / 46%), rgb(2 6 23 / 72%)); }
+      .bgVideo { display: none; object-fit: cover; z-index: 0; }
+      .bgFallback { z-index: 0; background: url('/business-login-bg.jpg') center / cover no-repeat; transform: scale(1.025); animation: loginDrift 20s ease-in-out infinite alternate; }
+      .shade { z-index: 1; background: radial-gradient(circle at 50% 44%, rgb(15 23 42 / 22%), transparent 33%), linear-gradient(90deg, rgb(2 6 23 / 70%), rgb(2 6 23 / 46%), rgb(2 6 23 / 72%)); }
       :root[data-theme="light"] .shade { background: radial-gradient(circle at 50% 45%, rgb(255 255 255 / 18%), transparent 34%), linear-gradient(90deg, rgb(238 244 250 / 62%), rgb(238 244 250 / 34%), rgb(238 244 250 / 66%)); }
       @keyframes loginDrift { from { transform: scale(1.04) translate3d(-8px, -6px, 0); } to { transform: scale(1.09) translate3d(10px, 8px, 0); } }
-      main { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+      main { position: relative; z-index: 2; min-height: 100vh; display: grid; place-items: center; padding: 20px; }
       .loginCard {
         width: min(420px, calc(100vw - 32px));
         background: var(--card);
