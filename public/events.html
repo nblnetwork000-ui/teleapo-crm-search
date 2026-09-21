@@ -19,7 +19,6 @@
             </div>
             <h1 id="pageTitle" class="srOnly">SIGNAL</h1>
             <p>営業機会につながるイベントを見つける</p>
-            <p id="sheetName">追記先: 読み込み中</p>
           </div>
           <div class="headingActions">
             <button id="guideOpenButton" class="guideOpenButton" type="button">使い方</button>
@@ -134,10 +133,6 @@
               件数
               <input id="eventResults" name="results" type="number" min="1" max="100" value="20" required />
             </label>
-            <label class="check inline-check">
-              <input name="append" type="checkbox" />
-              シートへ追記
-            </label>
           </div>
           <label class="check">
             <input name="futureOnly" type="checkbox" checked />
@@ -173,7 +168,32 @@
           </table>
         </div>
       </section>
+      <section class="results" aria-labelledby="savedTitle">
+        <div class="toolbar">
+          <h2 id="savedTitle">保存リスト</h2>
+          <span id="savedSummary">読み込み中...</span>
+        </div>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>イベント名</th><th>開催場所</th><th>時間</th><th>参加費</th><th>詳細・カレンダー</th></tr></thead>
+            <tbody id="savedRows"></tbody>
+          </table>
+        </div>
+      </section>
     </main>
+    <dialog id="profileDialog" class="onboardingDialog" aria-labelledby="profileTitle">
+      <div class="onboardingHeader"><span class="onboardingBrand">SIGNAL START</span><span class="onboardingProgress">初回のみ</span></div>
+      <h2 id="profileTitle">利用開始アンケート</h2>
+      <p class="onboardingDescription">利用状況の把握のため、次の4項目を入力してください。回答は管理者が確認できます。</p>
+      <form id="profileForm" class="profileForm">
+        <label>業種<input name="industry" maxlength="80" autocomplete="organization-title" placeholder="例：不動産業" required /></label>
+        <label>組織の人数<input name="organizationSize" type="number" min="1" max="1000000" placeholder="例：10" required /></label>
+        <label>今回の利用目的<textarea name="purpose" maxlength="200" rows="3" placeholder="例：交流会を探し、取引先候補と接点を作る" required></textarea></label>
+        <label>所在地<input name="location" maxlength="80" placeholder="例：東京都渋谷区" required /></label>
+        <p id="profileStatus" class="status" role="status"></p>
+        <button id="profileSubmit" type="submit">回答して利用を開始</button>
+      </form>
+    </dialog>
     <dialog id="onboardingDialog" class="onboardingDialog" aria-labelledby="onboardingTitle" aria-describedby="onboardingDescription">
       <div class="onboardingHeader">
         <span class="onboardingBrand">SIGNAL GUIDE</span>

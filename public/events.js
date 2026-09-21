@@ -8,9 +8,10 @@ const eventAreaDetail = document.querySelector('#eventAreaDetail');
 const eventWebSource = document.querySelector('#eventWebSource');
 const appearanceToggle = document.querySelector('#appearanceToggle');
 const rows = document.querySelector('#rows');
+const savedRows = document.querySelector('#savedRows');
+const savedSummary = document.querySelector('#savedSummary');
 const summary = document.querySelector('#summary');
 const statusBox = document.querySelector('#status');
-const sheetName = document.querySelector('#sheetName');
 const adminUsersLink = document.querySelector('#adminUsersLink');
 const guideOpenButton = document.querySelector('#guideOpenButton');
 const onboardingDialog = document.querySelector('#onboardingDialog');
@@ -22,13 +23,17 @@ const onboardingTip = document.querySelector('#onboardingTip');
 const onboardingSkip = document.querySelector('#onboardingSkip');
 const onboardingBack = document.querySelector('#onboardingBack');
 const onboardingNext = document.querySelector('#onboardingNext');
+const profileDialog = document.querySelector('#profileDialog');
+const profileForm = document.querySelector('#profileForm');
+const profileStatus = document.querySelector('#profileStatus');
+const profileSubmit = document.querySelector('#profileSubmit');
 
 const ONBOARDING_STEPS = [
   {
     section: 'はじめに',
     title: 'SIGNALへようこそ',
     description: 'イベント検索から候補の比較まで、この画面で行えます。最初に基本操作を4つの手順で確認します。',
-    tip: '検索だけならデータは保存されません。まずはシートへの追記をオフのままお試しください。'
+    tip: '検索だけならデータは保存されません。'
   },
   {
     section: '検索条件',
@@ -43,10 +48,10 @@ const ONBOARDING_STEPS = [
     tip: '「要確認」は情報を取得できなかった項目です。日時・料金・申込条件は掲載元で最終確認してください。'
   },
   {
-    section: '結果の保存',
-    title: '必要な結果だけシートへ',
-    description: 'Googleシートに記録する場合のみ「シートへ追記」をオンにして、もう一度検索します。',
-    tip: '検索後は「取得・追記・スキップ」の件数を確認してください。この案内は「使い方」からいつでも見直せます。'
+    section: '保存と予定登録',
+    title: '保存リストからカレンダーへ',
+    description: '気になるイベントを保存リストに追加できます。開催日時があるイベントは、Googleカレンダーの予定作成画面へ進めます。',
+    tip: '予定を開いた後、日時や場所を確認してGoogleカレンダー側で保存してください。'
   }
 ];
 let onboardingStepIndex = 0;
@@ -98,7 +103,6 @@ if (!configResponse.ok) {
 const appConfig = await configResponse.json();
 csrfToken = appConfig.csrfToken;
 eventResultsInput.max = appConfig.maxResultsPerRun;
-sheetName.textContent = `追記先: ${appConfig.eventSheetName}`;
 if (appConfig.webSearchAvailable) {
   eventWebSource.hidden = false;
   eventWebSource.disabled = false;
@@ -106,7 +110,10 @@ if (appConfig.webSearchAvailable) {
 if (appConfig.isAdmin) {
   adminUsersLink.hidden = false;
 }
-onboardingStorageKey = `signal-event-onboarding-v1:${String(appConfig.memberEmail || '').trim().toLowerCase()}`;
+let savedEvents = [];
+let currentSearchItems = [];
+loadSavedEvents();
+onboardingStorageKey = `signal-event-onboarding-v2:${String(appConfig.memberEmail || '').trim().toLowerCase()}`;
 guideOpenButton.addEventListener('click', () => openOnboarding());
 onboardingSkip.addEventListener('click', () => closeOnboarding());
 onboardingBack.addEventListener('click', () => {
@@ -125,9 +132,41 @@ onboardingDialog.addEventListener('cancel', (event) => {
   event.preventDefault();
   closeOnboarding();
 });
-if (localStorage.getItem(onboardingStorageKey) !== 'done') {
+if (!appConfig.isAdmin && !appConfig.profileComplete) {
+  profileDialog.showModal();
+} else if (localStorage.getItem(onboardingStorageKey) !== 'done') {
   openOnboarding();
 }
+
+profileDialog.addEventListener('cancel', (event) => event.preventDefault());
+profileForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  profileSubmit.disabled = true;
+  profileStatus.textContent = '回答を保存しています...';
+  profileStatus.dataset.state = '';
+  const formData = new FormData(profileForm);
+  try {
+    const response = await fetch('/api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken },
+      body: JSON.stringify({
+        industry: formData.get('industry'),
+        organizationSize: Number(formData.get('organizationSize')),
+        purpose: formData.get('purpose'),
+        location: formData.get('location')
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '回答を保存できませんでした。');
+    profileDialog.close();
+    if (localStorage.getItem(onboardingStorageKey) !== 'done') openOnboarding();
+  } catch (error) {
+    profileStatus.textContent = error.message;
+    profileStatus.dataset.state = 'error';
+  } finally {
+    profileSubmit.disabled = false;
+  }
+});
 
 function openOnboarding() {
   onboardingStepIndex = 0;
@@ -167,7 +206,7 @@ eventForm.addEventListener('submit', async (event) => {
     results: Number(formData.get('results')),
     start: 1,
     futureOnly: formData.get('futureOnly') === 'on',
-    append: formData.get('append') === 'on'
+    append: false
   };
 
   setBusy(true);
@@ -186,7 +225,7 @@ eventForm.addEventListener('submit', async (event) => {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '処理に失敗しました。');
     renderEventRows(data.items);
-    summary.textContent = `${data.count}件取得 / ${data.appended}件追記 / ${data.skipped}件スキップ`;
+    summary.textContent = `${data.count}件取得`;
     const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
     if (warnings.length) {
       setStatus(`検索は完了しました。${warnings.join(' / ')}`);
@@ -217,6 +256,7 @@ function populateAreaDetails(prefecture) {
 }
 
 function renderEventRows(items) {
+  currentSearchItems = items;
   const fragment = document.createDocumentFragment();
   for (const item of items) {
     const tr = document.createElement('tr');
@@ -225,7 +265,7 @@ function renderEventRows(items) {
       textCell(formatLocation(item), '開催場所'),
       textCell(formatEventTime(item), '時間'),
       textCell(item.fee || '要確認', '参加費'),
-      detailCell(item)
+      detailCell(item, true)
     );
     fragment.append(tr);
   }
@@ -239,11 +279,11 @@ function textCell(value, label) {
   return td;
 }
 
-function detailCell(item) {
+function detailCell(item, allowSave = false) {
   const td = document.createElement('td');
   td.dataset.label = '詳細';
   td.classList.add('detailCell');
-  if (!item.url) {
+  if (!/^https?:\/\//i.test(String(item.url || ''))) {
     td.textContent = item.source || '-';
     return td;
   }
@@ -254,7 +294,120 @@ function detailCell(item) {
   link.textContent = '詳細を見る';
   link.title = `${item.source || '掲載元'}のページを開く`;
   td.append(link);
+  if (allowSave) {
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.className = 'miniButton';
+    saveButton.textContent = savedEvents.some((saved) => saved.url === item.url && saved.startedAt === item.startedAt) ? '保存済み' : '保存リストへ';
+    saveButton.disabled = saveButton.textContent === '保存済み';
+    saveButton.addEventListener('click', async () => {
+      saveButton.disabled = true;
+      try {
+        const response = await fetch('/api/saved-events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken },
+          body: JSON.stringify({ item })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '保存できませんでした。');
+        await loadSavedEvents();
+        saveButton.textContent = '保存済み';
+        setStatus('保存リストに追加しました。');
+      } catch (error) {
+        saveButton.disabled = false;
+        setStatus(error.message, true);
+      }
+    });
+    td.append(saveButton);
+  }
   return td;
+}
+
+async function loadSavedEvents() {
+  try {
+    const response = await fetch('/api/saved-events');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '保存リストを取得できませんでした。');
+    savedEvents = data.items || [];
+    renderSavedEvents();
+    if (currentSearchItems.length) renderEventRows(currentSearchItems);
+  } catch (error) {
+    savedSummary.textContent = error.message;
+  }
+}
+
+function renderSavedEvents() {
+  savedRows.replaceChildren();
+  savedSummary.textContent = savedEvents.length ? `${savedEvents.length}件保存` : '保存したイベントはありません';
+  for (const item of savedEvents) {
+    const tr = document.createElement('tr');
+    const actions = detailCell(item);
+    const calendarUrl = googleCalendarUrl(item);
+    if (calendarUrl) {
+      const calendarLink = document.createElement('a');
+      calendarLink.href = calendarUrl;
+      calendarLink.target = '_blank';
+      calendarLink.rel = 'noopener';
+      calendarLink.textContent = 'Googleカレンダーに追加';
+      actions.append(calendarLink);
+    } else {
+      const notice = document.createElement('span');
+      notice.textContent = '日時要確認';
+      actions.append(notice);
+    }
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'miniButton';
+    removeButton.textContent = 'リストから削除';
+    removeButton.addEventListener('click', async () => {
+      removeButton.disabled = true;
+      try {
+        const response = await fetch('/api/saved-events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken },
+          body: JSON.stringify({ action: 'delete', id: item.id })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '削除できませんでした。');
+        await loadSavedEvents();
+        setStatus('保存リストから削除しました。');
+      } catch (error) {
+        removeButton.disabled = false;
+        setStatus(error.message, true);
+      }
+    });
+    actions.append(removeButton);
+    tr.append(textCell(item.title, 'イベント名'), textCell(formatLocation(item), '開催場所'), textCell(formatEventTime(item), '時間'), textCell(item.fee || '要確認', '参加費'), actions);
+    savedRows.append(tr);
+  }
+}
+
+function googleCalendarUrl(item) {
+  if (!item.startedAt) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(item.startedAt)) {
+    const startDay = new Date(`${item.startedAt}T00:00:00Z`);
+    if (Number.isNaN(startDay.getTime())) return '';
+    const endDay = new Date(startDay.getTime() + 24 * 60 * 60 * 1000);
+    const dateOnly = (date) => date.toISOString().slice(0, 10).replace(/-/g, '');
+    const params = new URLSearchParams({ action: 'TEMPLATE', text: item.title, dates: `${dateOnly(startDay)}/${dateOnly(endDay)}`, details: item.url, location: formatLocation(item) });
+    return `https://calendar.google.com/calendar/r/eventedit?${params}`;
+  }
+  const start = new Date(item.startedAt);
+  if (Number.isNaN(start.getTime())) return '';
+  const endCandidate = item.endedAt ? new Date(item.endedAt) : null;
+  const end = endCandidate && !Number.isNaN(endCandidate.getTime()) && endCandidate > start
+    ? endCandidate : new Date(start.getTime() + 60 * 60 * 1000);
+  const calendarDate = (date) => date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: item.title,
+    dates: `${calendarDate(start)}/${calendarDate(end)}`,
+    stz: 'Asia/Tokyo',
+    etz: 'Asia/Tokyo',
+    details: `${item.url}\n参加費：${item.fee || '要確認'}`,
+    location: formatLocation(item)
+  });
+  return `https://calendar.google.com/calendar/r/eventedit?${params}`;
 }
 
 function formatLocation(item) {
