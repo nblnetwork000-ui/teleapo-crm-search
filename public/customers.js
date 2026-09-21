@@ -22,6 +22,7 @@ try {
   const config = await api('/api/config');
   csrfToken = config.csrfToken;
   document.querySelector('#account').textContent = `${config.memberEmail} の専用リスト`;
+  if (config.isAdmin) document.querySelector('#adminUsersLink').hidden = false;
   await reload();
 } catch (error) {
   say(error.message, true);
