@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SIGNAL | マイ顧客リスト</title>
+    <link rel="icon" type="image/png" href="./assets/signal-icon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./customers.css" />
+    <script src="./customers.js" type="module"></script>
+  </head>
+  <body>
+    <main class="customerApp">
+      <header class="customerHeader">
+        <div><div class="signalBrand"><img src="./assets/signal-icon.png" alt="" /><span>SIGNAL</span></div><h1>マイ顧客リスト</h1><p id="account"></p></div>
+        <nav><a class="crmLink" href="/events.html">イベント検索</a><a class="crmLink" href="/logout">ログアウト</a></nav>
+      </header>
+      <section class="customerPanel">
+        <h2>顧客を登録・更新</h2>
+        <p class="customerHint">この一覧はログイン中の本人専用です。招待された他のユーザーには表示されません。</p>
+        <form id="customerForm" class="form">
+          <input name="id" type="hidden" />
+          <div class="grid"><label>会社名・店舗名<input name="name" maxlength="160" required /></label><label>電話番号<input name="phone" maxlength="80" /></label></div>
+          <div class="grid"><label>住所<input name="address" maxlength="300" /></label><label>担当者<input name="person" maxlength="120" /></label></div>
+          <div class="grid"><label>ステータス<input name="status" maxlength="80" /></label><label>次回連絡<input name="nextCall" maxlength="80" placeholder="例: 2026-10-01" /></label></div>
+          <label>メモ<textarea name="memo" maxlength="2000" rows="3"></textarea></label>
+          <div class="customerActions"><button type="submit">保存する</button><button id="clearForm" type="button" class="secondaryButton">新規入力に戻す</button></div>
+        </form>
+        <p id="status" class="status" role="status"></p>
+      </section>
+      <section class="customerPanel">
+        <div class="customerToolbar"><div><h2>保存済み顧客 <span id="count"></span></h2><p class="customerHint">旧CRMのCSVも取り込めます。取り込み先は現在ログイン中のアカウントです。</p></div><div class="customerActions"><label class="fileButton">CSVを取り込む<input id="csvInput" type="file" accept=".csv,text/csv" hidden /></label><button id="exportButton" type="button" class="secondaryButton">CSVを書き出す</button></div></div>
+        <label class="customerFilter">一覧を絞り込む<input id="filter" type="search" placeholder="会社名・電話番号・メモ" /></label>
+        <div class="tableWrap"><table><thead><tr><th>会社名・店舗名</th><th>電話番号</th><th>住所</th><th>担当者</th><th>ステータス</th><th>次回連絡</th><th>メモ</th><th></th></tr></thead><tbody id="customerRows"></tbody></table></div>
+      </section>
+    </main>
+  </body>
+</html>

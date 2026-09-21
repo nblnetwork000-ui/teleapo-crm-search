@@ -1,0 +1,13 @@
+.customerApp { width: min(1300px, calc(100% - 32px)); margin: 24px auto; display: grid; gap: 20px; }
+.customerHeader, .customerPanel { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 20px; }
+.customerHeader, .customerToolbar, .customerActions, .customerHeader nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.customerHeader p, .customerHint { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 6px 0 16px; }
+.customerPanel { display: grid; gap: 14px; }
+.customerPanel h2 { margin: 0; }
+textarea { width: 100%; background: var(--field); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 10px 12px; font: inherit; resize: vertical; }
+.customerActions { justify-content: flex-start; }
+.secondaryButton, .fileButton { display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; font: inherit; font-weight: 800; cursor: pointer; }
+.customerToolbar .customerHint { margin-bottom: 0; }
+.customerFilter { max-width: 360px; }
+.customerPanel .tableWrap { max-height: 65vh; }
+@media(max-width: 640px) { .customerApp { width: min(100% - 20px, 1300px); margin: 10px auto; } .customerHeader, .customerPanel { padding: 14px; } }
