@@ -43,6 +43,8 @@ SHOP_COLUMN_WIDTHS = [220, 150, 360, 130, 420]
 EVENT_SHEET_NAME = "イベントリスト"
 JOB_SHEET_NAME = "求人掲載店舗リスト"
 USER_SHEET_NAME = "SIGNALユーザー"
+CUSTOMER_SHEET_NAME = "SIGNAL顧客リスト"
+CUSTOMER_HEADERS = ["所有者メール", "ID", "会社名・店舗名", "電話番号", "住所", "担当者", "ステータス", "次回連絡", "メモ", "記録履歴JSON", "更新日時"]
 USER_HEADERS = [
     "メールアドレス",
     "パスワードハッシュ",
@@ -1971,6 +1973,86 @@ def ensure_sheet_exists(sheets, config, sheet_name):
     )
 
 
+class CustomerStore:
+    """Keep every customer's owner on the server, never accept it from a request."""
+
+    def __init__(self, sheets, config):
+        self.sheets = sheets
+        self.config = config
+        self.lock = threading.RLock()
+
+    def _rows(self):
+        ensure_sheet_exists(self.sheets, self.config, CUSTOMER_SHEET_NAME)
+        sheet = quote_sheet_name(CUSTOMER_SHEET_NAME)
+        header = self.sheets.get_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A1:K1").get("values", [])
+        if not header:
+            self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A1:K1", [CUSTOMER_HEADERS])
+        elif header[0] != CUSTOMER_HEADERS:
+            raise RuntimeError("顧客リストの列構成が一致しません。管理者に確認してください。")
+        return self.sheets.get_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A2:K").get("values", [])
+
+    def list_for(self, email):
+        with self.lock:
+            return [self._decode(row) for row in self._rows() if row and row[0].lower() == email.lower()]
+
+    @staticmethod
+    def _decode(row):
+        cells = (row + [""] * 11)[:11]
+        try:
+            notes = json.loads(cells[9]) if cells[9] else []
+        except (TypeError, ValueError):
+            notes = []
+        return dict(zip(("owner", "id", "name", "phone", "address", "person", "status", "nextCall", "memo", "notes", "updatedAt"), cells[:9] + [notes, cells[10]]))
+
+    def save(self, email, items):
+        if not isinstance(items, list) or not 1 <= len(items) <= 100:
+            raise InputError("顧客は1回につき1〜100件で保存してください。")
+        with self.lock:
+            rows = self._rows()
+            existing = {(row[0].lower(), row[1]): index + 2 for index, row in enumerate(rows) if len(row) > 1 and row[1]}
+            saved = []
+            seen = set()
+            appended = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    raise InputError("顧客情報が不正です。")
+                name = clean_customer_field(item.get("name"), "会社名・店舗名", 160)
+                if not name:
+                    raise InputError("会社名・店舗名を入力してください。")
+                identifier = item.get("id") or secrets.token_hex(16)
+                if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", identifier):
+                    raise InputError("顧客IDが不正です。")
+                if identifier in seen:
+                    raise InputError("同じ顧客IDが重複しています。")
+                seen.add(identifier)
+                notes = item.get("notes", [])
+                if not isinstance(notes, list) or len(json.dumps(notes, ensure_ascii=False)) > 12000:
+                    raise InputError("記録履歴が大きすぎます。")
+                row = [email.lower(), identifier, name]
+                for field, label, limit in (("phone", "電話番号", 80), ("address", "住所", 300), ("person", "担当者", 120), ("status", "ステータス", 80), ("nextCall", "次回連絡", 80), ("memo", "メモ", 2000)):
+                    row.append(clean_customer_field(item.get(field), label, limit))
+                row.extend([json.dumps(notes, ensure_ascii=False), utc_timestamp()])
+                sheet = quote_sheet_name(CUSTOMER_SHEET_NAME)
+                key = (email.lower(), identifier)
+                if key in existing:
+                    number = existing[key]
+                    self.sheets.update_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A{number}:K{number}", [row])
+                else:
+                    self.sheets.append_values(self.config["GOOGLE_SHEET_ID"], f"{sheet}!A:K", [row])
+                    appended += 1
+                    existing[key] = len(rows) + appended + 1
+                saved.append(self._decode(row))
+            return saved
+
+
+def clean_customer_field(value, label, limit):
+    if value is None:
+        return ""
+    if not isinstance(value, str) or len(value) > limit:
+        raise InputError(f"{label}は{limit}文字以内で入力してください。")
+    return value.strip()
+
+
 def get_sheet_id(sheets, config, sheet_name):
     spreadsheet = sheets.get_spreadsheet(config["GOOGLE_SHEET_ID"])
     for sheet in spreadsheet.get("sheets", []):
@@ -2398,6 +2480,7 @@ def looks_like_timestamp(value):
 def make_handler(config, sheets, csrf_token):
     hits = {}
     users = UserStore(sheets, config)
+    customers = CustomerStore(sheets, config)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "LocalSearchSheets/1.0"
@@ -2426,6 +2509,15 @@ def make_handler(config, sheets, csrf_token):
                 if not self.require_admin(member):
                     return
                 self.send_admin_users_page(member)
+                return
+            if parsed.path == "/api/customers":
+                if not member:
+                    self.send_json(401, {"error": "ログインしてください。"})
+                    return
+                try:
+                    self.send_json(200, {"items": customers.list_for(member)})
+                except Exception as error:
+                    self.send_json(500, {"error": str(error)})
                 return
             if config["APP_MODE"] == "events":
                 if parsed.path == "/":
@@ -2480,7 +2572,15 @@ def make_handler(config, sheets, csrf_token):
                 self.send_json(403, {"error": "不正なリクエストです。画面を再読み込みしてください。"})
                 return
             try:
-                data = self.read_json_body()
+                data = self.read_json_body(1024 * 1024 if parsed.path == "/api/customers" else 20 * 1024)
+                if parsed.path == "/api/customers":
+                    if not member:
+                        self.send_json(401, {"error": "ログインしてください。"})
+                        return
+                    if not isinstance(data, dict):
+                        raise InputError("顧客情報が不正です。")
+                    self.send_json(200, {"items": customers.save(member, data.get("items"))})
+                    return
                 if self.path == "/api/events/search-and-append":
                     self.handle_event_search(data)
                     return
@@ -2580,9 +2680,9 @@ def make_handler(config, sheets, csrf_token):
                 },
             )
 
-        def read_json_body(self):
+        def read_json_body(self, max_length=20 * 1024):
             length = int(self.headers.get("content-length", "0"))
-            if length > 20 * 1024:
+            if length > max_length:
                 raise InputError("リクエストが大きすぎます。")
             return json.loads(self.rfile.read(length).decode("utf-8") or "{}")
 
