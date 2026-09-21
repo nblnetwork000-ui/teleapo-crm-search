@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
 import app
 
@@ -130,6 +131,32 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(store.list_for("member@example.com")[0]["name"], "A社")
         self.assertEqual(store.list_for("other@example.com")[0]["name"], "別ユーザーの同じID")
 
+    def test_profile_answers_are_stored_per_user(self):
+        self.store.ensure_initialized()
+        self.store.invite("member@example.com", "https://signal.example")
+        answers = {"industry": "製造業", "organizationSize": 12, "purpose": "交流会を探す", "location": "東京都港区"}
+        self.store.save_profile("admin@example.com", answers)
+        admin = self.store.find("admin@example.com")
+        member = self.store.find("member@example.com")
+        self.assertEqual(admin["industry"], "製造業")
+        self.assertEqual(admin["organizationSize"], "12")
+        self.assertEqual(member["industry"], "")
+        with self.assertRaises(app.InputError):
+            self.store.save_profile("admin@example.com", {**answers, "organizationSize": 0})
+
+    def test_saved_events_are_private_and_removable(self):
+        store = app.SavedEventStore(self.sheets, self.config)
+        item = {"title": "経営者交流会", "startedAt": "2026-10-01T19:00:00+09:00", "url": "https://example.com/event/1", "place": "東京"}
+        saved = store.save("member@example.com", item)
+        self.assertEqual(len(store.list_for("member@example.com")), 1)
+        self.assertEqual(store.list_for("other@example.com"), [])
+        store.save("member@example.com", item)
+        self.assertEqual(len(store.list_for("member@example.com")), 1)
+        store.save("other@example.com", item)
+        store.delete("member@example.com", saved["id"])
+        self.assertEqual(store.list_for("member@example.com"), [])
+        self.assertEqual(len(store.list_for("other@example.com")), 1)
+
 
 class HttpAuthFlowTests(unittest.TestCase):
     def setUp(self):
@@ -215,6 +242,51 @@ class HttpAuthFlowTests(unittest.TestCase):
         self.assertTrue(accepted.geturl().endswith("/events.html"))
         member_config = json.loads(member.open(self.base_url + "/api/config", timeout=5).read())
         self.assertFalse(member_config["isAdmin"])
+        self.assertFalse(member_config["profileComplete"])
+
+        profile_request = urllib.request.Request(
+            self.base_url + "/api/profile",
+            data=json.dumps({"industry": "IT", "organizationSize": 3, "purpose": "営業先の開拓", "location": "大阪府大阪市"}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json", "x-csrf-token": "test-csrf-token"},
+        )
+        self.assertTrue(json.loads(member.open(profile_request, timeout=5).read())["saved"])
+        member_config = json.loads(member.open(self.base_url + "/api/config", timeout=5).read())
+        self.assertTrue(member_config["profileComplete"])
+        admin_page = self.admin.open(self.base_url + "/admin/users", timeout=5).read().decode("utf-8")
+        self.assertIn("営業先の開拓", admin_page)
+
+        search_request = urllib.request.Request(
+            self.base_url + "/api/events/search-and-append",
+            data=json.dumps({"keyword": "交流会", "results": 1, "append": False}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json", "x-csrf-token": "test-csrf-token"},
+        )
+        with patch.object(app, "search_connpass_events", return_value={"total": 1, "count": 1, "items": [{"title": "交流会"}], "warnings": []}):
+            search_result = json.loads(member.open(search_request, timeout=5).read())
+        self.assertEqual(search_result["count"], 1)
+        self.assertNotIn(app.EVENT_SHEET_NAME, self.sheets.sheets)
+
+        append_request = urllib.request.Request(
+            self.base_url + "/api/events/search-and-append",
+            data=json.dumps({"keyword": "交流会", "results": 1, "append": True}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json", "x-csrf-token": "test-csrf-token"},
+        )
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            member.open(append_request, timeout=5)
+        self.assertEqual(caught.exception.code, 400)
+        self.assertIn("終了", caught.exception.read().decode("utf-8"))
+
+        saved_request = urllib.request.Request(
+            self.base_url + "/api/saved-events",
+            data=json.dumps({"item": {"title": "経営者交流会", "startedAt": "2026-10-01T19:00:00+09:00", "url": "https://example.com/event/1"}}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json", "x-csrf-token": "test-csrf-token"},
+        )
+        self.assertIn("id", json.loads(member.open(saved_request, timeout=5).read())["item"])
+        self.assertEqual(len(json.loads(member.open(self.base_url + "/api/saved-events", timeout=5).read())["items"]), 1)
+        self.assertEqual(json.loads(self.admin.open(self.base_url + "/api/saved-events", timeout=5).read())["items"], [])
 
         with self.assertRaises(urllib.error.HTTPError) as caught:
             member.open(self.base_url + "/api/customers", timeout=5)

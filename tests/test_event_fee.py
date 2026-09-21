@@ -33,6 +33,7 @@ class EventFeeTests(unittest.TestCase):
     def test_search_input_rejects_invalid_fee_options(self):
         payload = {"keyword": "交流会", "source": "all", "results": 20}
         self.assertEqual(app.parse_event_search_input(payload, 100)["feeBand"], "all")
+        self.assertFalse(app.parse_event_search_input(payload, 100)["append"])
         with self.assertRaises(app.InputError):
             app.parse_event_search_input({**payload, "feeBand": "negative"}, 100)
         with self.assertRaises(app.InputError):
