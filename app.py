@@ -1138,14 +1138,58 @@ def search_kokuchpro_events(api_key, search):
     if search.get("dateFrom"):
         query_parts.append(search["dateFrom"].replace("-", "年", 1).replace("-", "月", 1) + "日")
     query = " ".join(part for part in query_parts if part)
+    results = (
+        brave_web_results(api_key, query, search["results"], search["start"])
+        if api_key
+        else yahoo_kokuchpro_results(query, search["results"], search["start"])
+    )
     items = []
-    for result in brave_web_results(api_key, query, search["results"], search["start"]):
+    for result in results:
         item = kokuchpro_event_from_web_result(result)
         if not item:
             continue
         if search["futureOnly"] and item["startedAt"] and not is_event_today_or_later(item["startedAt"], today_local_date()):
             continue
         items.append(item)
+    return items
+
+
+def yahoo_kokuchpro_results(query, results, start=1):
+    """Use Yahoo Japan's public lightweight result page when the optional Brave API is unavailable."""
+    items = []
+    seen = set()
+    result_start = max(1, start)
+    while len(items) < results and result_start < start + 50:
+        params = urllib.parse.urlencode({"p": query, "ei": "UTF-8", "x": "wrt", "b": str(result_start)})
+        text = request_text(f"https://search.yahoo.co.jp/search?{params}", timeout=15)
+        page_items = parse_yahoo_kokuchpro_results(text)
+        if not page_items:
+            break
+        for item in page_items:
+            if item["url"] in seen:
+                continue
+            seen.add(item["url"])
+            items.append(item)
+        result_start += 10
+    return items[:results]
+
+
+def parse_yahoo_kokuchpro_results(text):
+    items = []
+    seen = set()
+    pattern = r'<li><a href="(https://www\.kokuchpro\.com/event/[^"]+)"[^>]*>(.*?)</a><div>(.*?)</div><em>'
+    for url, title_html, description_html in re.findall(pattern, text or "", re.S):
+        url = html.unescape(url)
+        if url in seen:
+            continue
+        seen.add(url)
+        items.append(
+            {
+                "url": url,
+                "title": clean_html(title_html),
+                "description": clean_html(description_html),
+            }
+        )
     return items
 
 
