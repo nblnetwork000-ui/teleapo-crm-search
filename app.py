@@ -471,7 +471,7 @@ def search_connpass_events(search, brave_search_api_key=""):
     if search["source"] == "connpass":
         events = scrape_connpass_search(keyword, search["start"], search["results"], search["futureOnly"])
     elif search["source"] == "kokuchpro":
-        events = scrape_kokuchpro_search(search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"])
+        events = search_kokuchpro_events(brave_search_api_key, search)
     elif search["source"] == "doorkeeper":
         events = scrape_doorkeeper_search(search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"])
     elif search["source"] == "web":
@@ -485,9 +485,7 @@ def search_connpass_events(search, brave_search_api_key=""):
             ("connpass", lambda: scrape_connpass_search(keyword, search["start"], search["results"], search["futureOnly"])),
             (
                 "こくちーず",
-                lambda: scrape_kokuchpro_search(
-                    search["keyword"], search["area"], search["start"], search["results"], search["futureOnly"]
-                ),
+                lambda: search_kokuchpro_events(brave_search_api_key, search),
             ),
             (
                 "Doorkeeper",
@@ -1084,14 +1082,14 @@ def filter_and_sort_events_by_fee(events, fee_band="all", fee_sort="date"):
     return [item for item, _amount in annotated]
 
 
-def search_web_events(api_key, search):
-    query_parts = [search["keyword"], search["area"], "イベント セミナー 交流会"]
-    query = " ".join(part for part in query_parts if part)
+def brave_web_results(api_key, query, results, start=1):
+    if not api_key:
+        raise InputError("Web検索APIが未設定です。管理者に設定を依頼してください。")
     params = urllib.parse.urlencode(
         {
             "q": query,
-            "count": str(min(search["results"], 20)),
-            "offset": str(min(9, max(0, (search["start"] - 1) // 20))),
+            "count": str(min(results, 20)),
+            "offset": str(min(9, max(0, (start - 1) // 20))),
             "country": "jp",
             "search_lang": "jp",
             "safesearch": "moderate",
@@ -1101,8 +1099,14 @@ def search_web_events(api_key, search):
         f"https://api.search.brave.com/res/v1/web/search?{params}",
         headers={"X-Subscription-Token": api_key},
     )
+    return (data.get("web") or {}).get("results") or []
+
+
+def search_web_events(api_key, search):
+    query_parts = [search["keyword"], search["area"], "イベント セミナー 交流会"]
+    query = " ".join(part for part in query_parts if part)
     items = []
-    for result in (data.get("web") or {}).get("results") or []:
+    for result in brave_web_results(api_key, query, search["results"], search["start"]):
         url = as_text(result.get("url"))
         if not url:
             continue
@@ -1126,6 +1130,77 @@ def search_web_events(api_key, search):
             }
         )
     return items
+
+
+def search_kokuchpro_events(api_key, search):
+    """Find Kokuchpro events through web search because its search pages reject server-side requests."""
+    query_parts = ["site:kokuchpro.com/event/", search["keyword"], search["area"], "イベント"]
+    if search.get("dateFrom"):
+        query_parts.append(search["dateFrom"].replace("-", "年", 1).replace("-", "月", 1) + "日")
+    query = " ".join(part for part in query_parts if part)
+    items = []
+    for result in brave_web_results(api_key, query, search["results"], search["start"]):
+        item = kokuchpro_event_from_web_result(result)
+        if not item:
+            continue
+        if search["futureOnly"] and item["startedAt"] and not is_event_today_or_later(item["startedAt"], today_local_date()):
+            continue
+        items.append(item)
+    return items
+
+
+def kokuchpro_event_from_web_result(result):
+    url = as_text(result.get("url"))
+    parsed_url = urllib.parse.urlparse(url)
+    if parsed_url.scheme not in {"http", "https"} or parsed_url.hostname not in {"kokuchpro.com", "www.kokuchpro.com"}:
+        return None
+    if not re.match(r"^/event/[^/]+(?:/[^/]+)?/?$", parsed_url.path):
+        return None
+
+    raw_title = clean_html(as_text(result.get("title")))
+    title = re.sub(r"\s*[-|]\s*こくちーずプロ\s*$", "", raw_title).strip()
+    description = clean_html(as_text(result.get("description")))
+    searchable = f"{title} {description}"
+    date_match = re.search(r"(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日", searchable)
+    time_matches = re.findall(r"(\d{1,2}):(\d{2})", searchable)
+    started_at = ""
+    ended_at = ""
+    if date_match:
+        date_text = date_match.group(0)
+        if time_matches:
+            started_at = parse_japanese_datetime(date_text, ":".join(time_matches[0]))
+            if len(time_matches) > 1:
+                ended_at = parse_japanese_datetime(date_text, ":".join(time_matches[1]))
+        else:
+            started_at = parse_japanese_datetime(date_text, "")
+
+    area_match = re.search(r"[（(]([^()（）]{1,40}(?:都|道|府|県|市|区|町|村|オンライン))[）)]", searchable)
+    place = area_match.group(1).strip() if area_match else ""
+    fee = kokuchpro_fee_from_snippet(searchable)
+    return {
+        "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "title": title,
+        "startedAt": started_at,
+        "endedAt": ended_at,
+        "place": place,
+        "address": description,
+        "url": url,
+        "limit": "",
+        "accepted": "",
+        "waiting": "",
+        "owner": "",
+        "hashTag": "",
+        "eventId": kokuchpro_event_id(url),
+        "source": "こくちーずプロ",
+        "fee": fee,
+    }
+
+
+def kokuchpro_fee_from_snippet(text):
+    if re.search(r"(?:無料イベント|参加費\s*[:：]?\s*無料|料金制度\s*[|:：]?\s*無料)", text):
+        return "無料"
+    match = re.search(r"(?:参加費|料金|費用)\s*[|:：]?\s*(?:[¥￥]\s*)?(\d[\d,]*)\s*円", text)
+    return f"{int(match.group(1).replace(',', '')):,}円" if match else ""
 
 
 def search_job_listings(search):
